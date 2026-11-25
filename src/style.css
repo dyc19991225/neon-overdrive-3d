@@ -1427,16 +1427,27 @@ body.touch-mode .hud-bottom-hint {
     white-space: nowrap;
   }
 
-  #boss-banner {
-    width: min(230px, 56vw);
-    padding: 4px 7px;
+  #boss-banner,
+  .beacon-banner {
+    width: min(168px, 42vw);
+    padding: 3px 6px;
   }
 
-  #boss-name {
-    font-size: 10.5px;
+  #boss-name,
+  #beacon-title {
+    font-size: 9.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .hud-center {
+    min-width: 0;
+    flex: 1;
   }
 
   .hud-right {
+    flex-shrink: 0;
     gap: 4px;
     flex-wrap: wrap;
     justify-content: flex-end;
