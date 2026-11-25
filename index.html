@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>霓虹超载：机甲幸存者 | NEON OVERDRIVE 3D</title>
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+    <canvas id="dmg-canvas"></canvas>
+    <div id="witch-vignette" class="hidden"></div>
+
+    <!-- Top HUD -->
+    <div id="hud" class="hidden">
+      <div id="offscreen-layer"></div>
+
+      <div class="xp-bar-wrap">
+        <div id="xp-bar-fill"></div>
+        <span id="xp-label">LV 1 · 0 / 8 XP</span>
+      </div>
+
+      <div class="hud-top-row">
+        <div class="hud-left">
+          <div class="hp-panel">
+            <div class="hp-bar-bg"><div id="hp-bar-fill"></div></div>
+            <span id="hp-text">100 / 100</span>
+          </div>
+          <div class="dash-panel">
+            <span>SPACE 相位冲刺</span>
+            <div class="dash-bar-bg"><div id="dash-bar-fill"></div></div>
+          </div>
+          <div class="buff-row">
+            <div id="buff-frenzy" class="buff-pill frenzy hidden">
+              🔥 无限超载 <strong id="frenzy-time">5.0s</strong>
+            </div>
+            <div id="buff-revive" class="buff-pill revive hidden">🛡 涅槃协议就绪</div>
+          </div>
+          <div id="slots-weapons" class="slot-row"></div>
+          <div id="slots-passives" class="slot-row"></div>
+        </div>
+
+        <div class="hud-center">
+          <div id="timer-text">00:00</div>
+          <div id="wave-label">STAGE 1 · 觉醒热身</div>
+          <div id="boss-banner" class="hidden">
+            <div id="boss-name">⚠ 重装蜘蛛统领</div>
+            <div class="boss-hp-bg"><div id="boss-hp-fill"></div></div>
+          </div>
+        </div>
+
+        <div class="hud-right">
+          <div id="combo-pill" class="combo-pill hidden">
+            <span id="combo-count">x10</span> <span id="combo-label">OVERKILL!</span>
+          </div>
+          <div class="stat-pill">击坠 <strong id="kill-count">0</strong></div>
+          <div class="stat-pill">同屏 <strong id="enemy-count">0</strong></div>
+          <div class="stat-pill">帧率 <strong id="fps-count">60</strong></div>
+          <button id="btn-hud-mute" class="hud-mini-btn" title="切换电音 BGM [M]">🎵 [M]</button>
+        </div>
+      </div>
+
+      <div id="toast-banner" class="hidden"></div>
+
+      <div class="hud-bottom-hint">
+        <span>[WASD / 方向键] 走位引导朝向</span>
+        <span>[SPACE] 无敌冲刺 / 贴脸极限闪避</span>
+        <span>[TAB] 6超武图鉴与音量</span>
+        <span>[M] 音乐开关</span>
+        <span class="debug-hint">[F2 空投舱 · F3 升级 · F4 召唤Boss · F5 磁铁狂暴球]</span>
+      </div>
+    </div>
+
+    <!-- Title Screen (Pure Keyboard + Click + Meta Hangar) -->
+    <div id="title-screen" class="overlay">
+      <div class="title-box">
+        <div class="title-header-bar">
+          <span class="cyber-tag">THREE.JS r187 · 6 HYPER WEAPONS · ADAPTIVE SYNTH</span>
+          <div class="core-wallet">
+            <span class="wallet-pill">💎 超导核心 <strong id="core-balance">60</strong></span>
+            <span id="career-summary" class="career-pill">累计击坠 0 · 最佳 00:00</span>
+          </div>
+        </div>
+
+        <h1>霓虹超载<span>NEON OVERDRIVE</span></h1>
+        <p class="subtitle">
+          单手纯键盘畅玩 · 机甲脚下弧形血量/冲刺环 · 6 主武器 Lv8 + 配对芯片开箱觉醒超武
+        </p>
+
+        <div class="mech-grid" id="mech-grid"></div>
+
+        <!-- Meta-Hangar Permanent Progression -->
+        <div class="hangar-panel">
+          <div class="hangar-header">
+            <span>🔧 局外机库永久改装（点击或按数字键 <strong>[4]–[9]</strong> 升级）</span>
+            <button id="btn-hangar-reset" class="neon-btn tiny">[0] 免费重置返还</button>
+          </div>
+          <div id="hangar-grid" class="hangar-grid"></div>
+        </div>
+
+        <div class="title-actions">
+          <div class="title-btn-row">
+            <button id="btn-start" class="neon-btn primary">按 [SPACE / ENTER] 立即出击</button>
+            <button id="btn-title-mute" class="neon-btn small">[M] 电音 BGM：开启</button>
+          </div>
+          <div class="key-legend">
+            切换机体：[A / D] 或 [1 / 2 / 3] · 机库强化：[4]–[9] · 走位自动倾泻弹幕
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Level Up / Evolution Modal -->
+    <div id="upgrade-modal" class="overlay hidden">
+      <div class="modal-box">
+        <div class="modal-tag" id="modal-tag">SYSTEM LEVEL UP</div>
+        <h2 id="modal-title">机甲升阶 · 选择模块</h2>
+        <div id="card-container" class="card-grid"></div>
+        <div class="modal-footer">
+          <span>按数字键 <strong>[1] [2] [3]</strong> 或点击卡片秒选</span>
+          <button id="btn-reroll" class="neon-btn small">[R] 重随 (<span id="reroll-left">2</span>)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recipe / Pause & Audio Mixer Modal -->
+    <div id="recipe-modal" class="overlay hidden">
+      <div class="modal-box wide">
+        <div class="modal-tag">HYPER EVOLUTION MATRIX &amp; AUDIO BUS</div>
+        <h2>全 6 组超武合成图鉴（已暂停）</h2>
+        <p class="recipe-sub">
+          任意主武器升满 <strong>Lv 8</strong> + 持有对应 <strong>Lv 1 被动芯片</strong> → 拾取金色超导空投舱必定进化！
+        </p>
+        <div id="recipe-list" class="recipe-grid"></div>
+
+        <div class="audio-mixer-bar">
+          <label class="slider-group">
+            <span>🎵 电音 BGM <strong id="bgm-val">65%</strong></span>
+            <input id="bgm-slider" type="range" min="0" max="100" value="65" />
+          </label>
+          <label class="slider-group">
+            <span>💥 战斗音效 <strong id="sfx-val">85%</strong></span>
+            <input id="sfx-slider" type="range" min="0" max="100" value="85" />
+          </label>
+          <button id="btn-mute-bgm" class="neon-btn tiny">[M] 静音切换</button>
+          <button id="btn-feel-toggle" class="neon-btn tiny">[V] 震屏强闪：100%</button>
+        </div>
+
+        <div class="modal-footer">
+          <span>提示：打破地图高爆等离子桶或击杀重装精英可掉落【全屏磁铁】与【无限超载球】</span>
+          <button id="btn-resume" class="neon-btn primary">按 [TAB / P / SPACE] 继续战斗</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Result Screen with Weapon DPS Chart -->
+    <div id="result-screen" class="overlay hidden">
+      <div class="modal-box wide">
+        <div class="modal-tag" id="result-tag">MISSION TERMINATED</div>
+        <h2 id="result-title">机体损毁</h2>
+        <div id="result-stats" class="result-stats"></div>
+
+        <div class="dps-section">
+          <div class="dps-header">⚡ 本局武器总伤占比与实时 DPS 排行</div>
+          <div id="dps-chart" class="dps-chart"></div>
+        </div>
+
+        <button id="btn-restart" class="neon-btn primary">按 [SPACE / ENTER] 返回机库改装</button>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

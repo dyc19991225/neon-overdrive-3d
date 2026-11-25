@@ -1,0 +1,95 @@
+{
+  "project": "cyber-survivors-3d",
+  "updated": "2026-11-25",
+  "assets": [
+    {
+      "id": "player-base-rig",
+      "file": "public/models/RobotExpressive.glb",
+      "role": "Rigged & skeletal-animated base cyber-mech chassis (Idle, Running, Jump clips)",
+      "source": {
+        "kind": "licensed_third_party",
+        "author": "Tomás Laulhé / Don McCurdy (Three.js official examples)",
+        "url": "https://github.com/mrdoob/three.js/tree/r187/examples/models/gltf/RobotExpressive",
+        "license": "CC0-1.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "player-mech-armory",
+      "file": "public/models/mech_armory.glb",
+      "role": "3D Gundam wing packs, heavy missile pods, and fin-funnel halos",
+      "source": {
+        "kind": "authored_procedural_dcc",
+        "tool": "Blender 5.3 headless Python (scripts/build_cyber_mechs.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "enemy-horde-mechs",
+      "file": "public/models/enemy_mechs.glb",
+      "role": "4 vertex-colored hard-surface enemy mechs for 1,200-unit InstancedMesh",
+      "source": {
+        "kind": "authored_procedural_dcc",
+        "tool": "Blender 5.3 headless Python (scripts/build_cyber_mechs.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "boss-omega-titan",
+      "file": "public/models/boss_titan.glb",
+      "role": "Hierarchical multi-part winged Cyber-Shogun Titan Boss mech",
+      "source": {
+        "kind": "authored_procedural_dcc",
+        "tool": "Blender 5.3 headless Python (scripts/build_cyber_mechs.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "cyber-map-props",
+      "file": "public/models/map_props.glb",
+      "role": "Infinite-chunked 3D Cyber-City Holo-Pylons, Armored Cargo Crates, and Shootable Explosive Plasma Barrels",
+      "source": {
+        "kind": "authored_procedural_dcc",
+        "tool": "Blender 5.3 headless Python (scripts/build_assets_all.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "weapons-and-loot-3d",
+      "file": "public/models/weapons_and_loot.glb",
+      "role": "3D Cyber Kunai Dagger, 8-Toothed Serrated Buzzsaw, Crystal Cluster, Hexagonal Orbital Supply Pod, Fullscreen Magnet Core, and Overdrive Frenzy Orb",
+      "source": {
+        "kind": "authored_procedural_dcc",
+        "tool": "Blender 5.3 headless Python (scripts/build_assets_all.py + scripts/build_p0_assets.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "ui-3d-raytraced-icons",
+      "file": "public/ui/*.png",
+      "role": "24 Cycles-raytraced 192x192 RGBA transparent 3D hardware illustrations for all 6 weapons, 6 hyper weapons, 7 passive chips, 3 mechs, and 2 fallback modules",
+      "source": {
+        "kind": "authored_procedural_dcc",
+        "tool": "Blender 5.3 Cycles Studio Renderer (scripts/build_assets_all.py + scripts/build_p0_assets.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "pbr-floor-and-vfx-textures",
+      "file": "public/textures/*.png + public/vfx/*.png",
+      "role": "Seamless 512x512 PBR Cyber-Hex Floor (Albedo, Linear Normal, Emissive) + 4 RGBA VFX Sprites (Shockwave, Starburst Flare, Scrolling Plasma Laser, Crescent Slash)",
+      "source": {
+        "kind": "authored_procedural_script",
+        "tool": "Python Pillow 13.0 (scripts/build_textures_and_vfx.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    }
+  ]
+}
