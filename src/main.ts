@@ -170,10 +170,19 @@ class NeonOverdriveGame {
   private shakeStrength = 1.0;
   private camFocus = new THREE.Vector3(0, 0, 0);
   private baseFov = 46;
+  private camDistScale = 1.0;
   private fovOffset = 0;
   private fovVel = 0;
   private rollSpring = 0;
   private rollVel = 0;
+
+  // Mobile Multi-Touch Virtual Joystick State (input-systems radial deadzone)
+  private touchEnabled = false;
+  private joyPointerId: number | null = null;
+  private joyOriginX = 0;
+  private joyOriginY = 0;
+  private touchMoveX = 0;
+  private touchMoveZ = 0;
 
   // Player Mech Rig + World-Aligned Diegetic 3D Arc Gauges (P0.1)
   private playerGroup = new THREE.Group();
@@ -1065,10 +1074,10 @@ class NeonOverdriveGame {
       if (Math.abs(nx) < 0.88 && Math.abs(ny) < 0.84) return;
 
       const angle = Math.atan2(-ny, nx);
-      const padX = 76;
-      const padY = 54;
-      const halfW = w * 0.5 - padX;
-      const halfH = h * 0.5 - padY;
+      const padX = this.touchEnabled ? 46 : 76;
+      const padY = this.touchEnabled ? 88 : 54;
+      const halfW = Math.max(40, w * 0.5 - padX);
+      const halfH = Math.max(40, h * 0.5 - padY);
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
       const scale = Math.min(
@@ -1667,7 +1676,11 @@ class NeonOverdriveGame {
     this.setScreen('playing');
     this.updateSlotBadges();
     this.updateHud();
-    this.showToast(`机甲【${this.currentMech.name}】出击！脚下左绿血槽 · 右青冲刺槽！`);
+    this.showToast(
+      this.touchEnabled
+        ? `机甲【${this.currentMech.name}】出击！左指滑动走位 · 右下⚡贴脸闪避触发子弹时间！`
+        : `机甲【${this.currentMech.name}】出击！脚下左绿血槽 · 右青冲刺槽！`
+    );
   }
 
   private clearBossVisuals(): void {
@@ -1687,6 +1700,11 @@ class NeonOverdriveGame {
     this.screen = next;
     if (next !== 'playing') {
       this.audio.setBulletTimeMuffle(false);
+      this.resetVirtualJoystick();
+    }
+    const touchEl = document.getElementById('touch-controls');
+    if (touchEl) {
+      touchEl.classList.toggle('hidden', next !== 'playing');
     }
     if (next === 'title') {
       this.diegeticGroup.visible = false;
@@ -1900,11 +1918,22 @@ class NeonOverdriveGame {
     if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) ix -= 1;
     if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) ix += 1;
 
-    const len = Math.hypot(ix, iz);
+    let moveMag = Math.hypot(ix, iz);
+    if (moveMag > 0.001) {
+      ix /= moveMag;
+      iz /= moveMag;
+      moveMag = 1.0;
+    } else if (this.joyPointerId !== null) {
+      ix = this.touchMoveX;
+      iz = this.touchMoveZ;
+      moveMag = Math.min(1.0, Math.hypot(ix, iz));
+    }
+
+    const len = moveMag;
     if (len > 0.001) {
-      ix /= len;
-      iz /= len;
-      const targetYaw = Math.atan2(ix, -iz);
+      const dirX = ix / Math.max(0.0001, Math.hypot(ix, iz));
+      const dirZ = iz / Math.max(0.0001, Math.hypot(ix, iz));
+      const targetYaw = Math.atan2(dirX, -dirZ);
       let diff = targetYaw - this.facingYaw;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
@@ -2062,6 +2091,7 @@ class NeonOverdriveGame {
     if (closeDanger && this.witchTimer <= 0) {
       this.witchTimer = 0.58;
       this.dashCd *= 0.65;
+      if (typeof navigator.vibrate === 'function') navigator.vibrate([18, 28, 36]);
       this.audio.playPerfectDodge();
       this.audio.setBulletTimeMuffle(true);
       document.getElementById('witch-vignette')!.classList.remove('hidden');
@@ -2095,7 +2125,11 @@ class NeonOverdriveGame {
     this.rollVel += rForce * rawDt;
     this.rollSpring += this.rollVel * rawDt;
 
-    this.camera.position.set(this.camFocus.x, 19.2, this.camFocus.z + 14.6);
+    this.camera.position.set(
+      this.camFocus.x,
+      19.2 * this.camDistScale,
+      this.camFocus.z + 14.6 * this.camDistScale
+    );
     this.camera.lookAt(this.camFocus.x, 0.85, this.camFocus.z);
 
     if (this.trauma > 0) {
@@ -4053,7 +4087,8 @@ class NeonOverdriveGame {
         const hyper = !!this.weaponHyper[wid];
         return `<div class="slot-badge weapon ${hyper ? 'hyper' : ''}">
           <img class="slot-icon" src="${hyper ? def.hyperImg : def.iconImg}" alt="${def.name}" />
-          <span>${hyper ? def.hyperName : `${def.name} Lv.${lv}`}</span>
+          <span class="slot-name-full">${hyper ? def.hyperName : `${def.name} Lv.${lv}`}</span>
+          <span class="slot-lv-short">${hyper ? '★' : `Lv${lv}`}</span>
         </div>`;
       })
       .join('');
@@ -4065,7 +4100,8 @@ class NeonOverdriveGame {
         const def = PASSIVES[pid];
         return `<div class="slot-badge passive">
           <img class="slot-icon" src="${def.iconImg}" alt="${def.name}" />
-          <span>${def.name} Lv.${lv}</span>
+          <span class="slot-name-full">${def.name} Lv.${lv}</span>
+          <span class="slot-lv-short">Lv${lv}</span>
         </div>`;
       })
       .join('');
@@ -4082,6 +4118,11 @@ class NeonOverdriveGame {
 
     const dashReadyPct = Math.min(100, (1 - this.dashCd / Math.max(0.01, this.dashMaxCd)) * 100);
     document.getElementById('dash-bar-fill')!.style.width = `${dashReadyPct.toFixed(0)}%`;
+    const touchDashBtn = document.getElementById('btn-touch-dash');
+    if (touchDashBtn) {
+      touchDashBtn.style.setProperty('--dash-pct', `${dashReadyPct.toFixed(0)}%`);
+      touchDashBtn.classList.toggle('cooling', dashReadyPct < 99.5);
+    }
 
     const frenzyEl = document.getElementById('buff-frenzy')!;
     if (this.frenzyTimer > 0) {
@@ -4128,7 +4169,7 @@ class NeonOverdriveGame {
     document.getElementById('bgm-val')!.textContent = muted ? '静音' : `${bgmPct}%`;
     document.getElementById('sfx-val')!.textContent = `${sfxPct}%`;
     document.getElementById('btn-title-mute')!.textContent = `[M] 电音 BGM：${muted ? '已静音' : '开启'}`;
-    document.getElementById('btn-hud-mute')!.textContent = muted ? '🔇 [M]' : '🎵 [M]';
+    document.getElementById('btn-hud-mute')!.textContent = muted ? '🔇' : '🎵';
   }
 
   private toggleBgmMute(): void {
@@ -4202,8 +4243,137 @@ class NeonOverdriveGame {
       .join('');
   }
 
+  private enableTouchMode(): void {
+    if (this.touchEnabled) return;
+    this.touchEnabled = true;
+    document.body.classList.add('touch-mode');
+  }
+
+  private resetVirtualJoystick(): void {
+    this.joyPointerId = null;
+    this.touchMoveX = 0;
+    this.touchMoveZ = 0;
+    const base = document.getElementById('joy-base');
+    const knob = document.getElementById('joy-knob');
+    if (base) {
+      base.classList.remove('active');
+      base.style.left = '';
+      base.style.top = '';
+      base.style.bottom = '';
+    }
+    if (knob) {
+      knob.style.transform = 'translate3d(0, 0, 0)';
+    }
+  }
+
+  private requestBufferedDash(): void {
+    if (this.screen !== 'playing') return;
+    this.dashBufferTimer = 0.18;
+    if (this.dashCd <= 0 && this.dashActiveTimer <= 0) {
+      this.dashBufferTimer = 0;
+      if (typeof navigator.vibrate === 'function') navigator.vibrate(14);
+      this.executeDash();
+    }
+  }
+
   private bindEvents(): void {
     window.addEventListener('resize', () => this.onResize());
+    window.addEventListener('orientationchange', () => setTimeout(() => this.onResize(), 60));
+
+    // Unlock WebAudio on mobile iOS Safari / Android Chrome first touch
+    window.addEventListener('touchstart', () => {
+      this.enableTouchMode();
+      this.audio.unlock();
+    }, { passive: true });
+    window.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') this.enableTouchMode();
+      this.audio.unlock();
+    }, { passive: true });
+
+    if (
+      window.matchMedia('(pointer: coarse)').matches ||
+      'ontouchstart' in window ||
+      window.innerWidth <= 820
+    ) {
+      this.enableTouchMode();
+    }
+
+    // Floating Multi-Touch Virtual Joystick with Radial Deadzone (0.14)
+    const joyZone = document.getElementById('joystick-zone')!;
+    const joyBase = document.getElementById('joy-base')!;
+    const joyKnob = document.getElementById('joy-knob')!;
+    const maxStickR = 46;
+    const deadzone = 0.14;
+
+    const updateStickFromPoint = (clientX: number, clientY: number) => {
+      const dx = clientX - this.joyOriginX;
+      const dy = clientY - this.joyOriginY;
+      const dist = Math.hypot(dx, dy);
+      const clamped = Math.min(maxStickR, dist);
+      const nx = dist > 0.001 ? dx / dist : 0;
+      const ny = dist > 0.001 ? dy / dist : 0;
+      joyKnob.style.transform = `translate3d(${(nx * clamped).toFixed(1)}px, ${(ny * clamped).toFixed(1)}px, 0)`;
+
+      const mag = Math.min(1, dist / maxStickR);
+      if (mag <= deadzone) {
+        this.touchMoveX = 0;
+        this.touchMoveZ = 0;
+      } else {
+        const rescaled = Math.min(1, (mag - deadzone) / (1 - deadzone));
+        this.touchMoveX = nx * rescaled;
+        this.touchMoveZ = ny * rescaled;
+      }
+    };
+
+    joyZone.addEventListener('pointerdown', (e) => {
+      if (this.screen !== 'playing' || this.joyPointerId !== null) return;
+      this.enableTouchMode();
+      this.audio.unlock();
+      this.joyPointerId = e.pointerId;
+      this.joyOriginX = e.clientX;
+      this.joyOriginY = e.clientY;
+      joyBase.classList.add('active');
+      joyBase.style.left = `${(e.clientX - joyBase.offsetWidth * 0.5).toFixed(0)}px`;
+      joyBase.style.top = `${(e.clientY - joyBase.offsetHeight * 0.5).toFixed(0)}px`;
+      joyBase.style.bottom = 'auto';
+      try {
+        joyZone.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore synthetic pointer capture edge cases
+      }
+      updateStickFromPoint(e.clientX, e.clientY);
+    });
+
+    joyZone.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== this.joyPointerId) return;
+      updateStickFromPoint(e.clientX, e.clientY);
+    });
+
+    const endStick = (e: PointerEvent) => {
+      if (e.pointerId !== this.joyPointerId) return;
+      this.resetVirtualJoystick();
+    };
+    joyZone.addEventListener('pointerup', endStick);
+    joyZone.addEventListener('pointercancel', endStick);
+
+    // Dedicated Touch Phase-Dash Button (isolated pointer so simultaneous move + dash works!)
+    const touchDashBtn = document.getElementById('btn-touch-dash')!;
+    touchDashBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.enableTouchMode();
+      this.audio.unlock();
+      touchDashBtn.classList.add('pressed');
+      this.requestBufferedDash();
+    });
+    const releaseDashBtn = () => touchDashBtn.classList.remove('pressed');
+    touchDashBtn.addEventListener('pointerup', releaseDashBtn);
+    touchDashBtn.addEventListener('pointercancel', releaseDashBtn);
+
+    document.getElementById('btn-hud-pause')!.addEventListener('click', () => {
+      this.audio.unlock();
+      if (this.screen === 'playing') this.setScreen('recipe');
+    });
 
     document.getElementById('btn-start')!.addEventListener('click', () => this.startRun());
     document.getElementById('btn-restart')!.addEventListener('click', () => this.setScreen('title'));
@@ -4382,7 +4552,27 @@ class NeonOverdriveGame {
   private onResize(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    this.camera.aspect = w / h;
+    const aspect = w / Math.max(1, h);
+
+    // Portrait / narrow mobile camera compensation: preserve horizontal arena visibility!
+    if (aspect < 1.05) {
+      this.baseFov = 54;
+      this.camDistScale = Math.min(1.46, 1.0 + (1.05 - aspect) * 0.72);
+      this.camera.far = 165;
+      (this.scene.fog as THREE.FogExp2).density = 0.0105;
+    } else {
+      this.baseFov = 46;
+      this.camDistScale = 1.0;
+      this.camera.far = 125;
+      (this.scene.fog as THREE.FogExp2).density = 0.014;
+    }
+
+    if (w <= 820) this.enableTouchMode();
+    const maxDpr = w <= 900 ? 1.25 : 1.5;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxDpr));
+
+    this.camera.aspect = aspect;
+    this.camera.fov = this.baseFov + this.fovOffset;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);

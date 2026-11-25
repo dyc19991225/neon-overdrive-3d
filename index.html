@@ -2,7 +2,13 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#050814" />
     <title>霓虹超载：机甲幸存者 | NEON OVERDRIVE 3D</title>
   </head>
   <body>
@@ -52,14 +58,34 @@
           <div id="combo-pill" class="combo-pill hidden">
             <span id="combo-count">x10</span> <span id="combo-label">OVERKILL!</span>
           </div>
-          <div class="stat-pill">击坠 <strong id="kill-count">0</strong></div>
-          <div class="stat-pill">同屏 <strong id="enemy-count">0</strong></div>
-          <div class="stat-pill">帧率 <strong id="fps-count">60</strong></div>
-          <button id="btn-hud-mute" class="hud-mini-btn" title="切换电音 BGM [M]">🎵 [M]</button>
+          <div class="stat-pill stat-kills">击坠 <strong id="kill-count">0</strong></div>
+          <div class="stat-pill stat-enemies">同屏 <strong id="enemy-count">0</strong></div>
+          <div class="stat-pill stat-fps">帧率 <strong id="fps-count">60</strong></div>
+          <button id="btn-hud-pause" class="hud-mini-btn" type="button" title="超武图鉴与暂停 [TAB]">
+            📖 图鉴
+          </button>
+          <button id="btn-hud-mute" class="hud-mini-btn" type="button" title="切换电音 BGM [M]">
+            🎵
+          </button>
         </div>
       </div>
 
       <div id="toast-banner" class="hidden"></div>
+
+      <!-- Mobile Floating Virtual Joystick & Touch Phase-Dash Controls -->
+      <div id="touch-controls">
+        <div id="joystick-zone">
+          <div id="joy-base">
+            <div id="joy-knob"></div>
+          </div>
+        </div>
+        <button id="btn-touch-dash" type="button" aria-label="相位冲刺">
+          <span class="dash-btn-inner">
+            <span class="dash-btn-icon">⚡</span>
+            <span class="dash-btn-txt">冲刺</span>
+          </span>
+        </button>
+      </div>
 
       <div class="hud-bottom-hint">
         <span>[WASD / 方向键] 走位引导朝向</span>

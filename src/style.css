@@ -12,14 +12,18 @@
 * {
   box-sizing: border-box;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 html, body {
   margin: 0;
   padding: 0;
   width: 100%;
-  height: 100%;
+  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+  overscroll-behavior: none;
   background: #04060e;
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   color: var(--text);
@@ -30,7 +34,9 @@ html, body {
   inset: 0;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   display: block;
+  touch-action: none;
 }
 
 #dmg-canvas {
@@ -116,7 +122,8 @@ html, body {
 .xp-bar-wrap {
   position: relative;
   width: 100%;
-  height: 20px;
+  height: calc(20px + env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
   background: rgba(8, 14, 30, 0.92);
   border-bottom: 1px solid rgba(34, 211, 238, 0.4);
 }
@@ -145,8 +152,8 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  padding: 10px 18px;
-  gap: 14px;
+  padding: 10px calc(16px + env(safe-area-inset-right, 0px)) 10px calc(16px + env(safe-area-inset-left, 0px));
+  gap: 12px;
 }
 
 .hud-left {
@@ -258,6 +265,10 @@ html, body {
   height: 24px;
   object-fit: contain;
   filter: drop-shadow(0 0 4px rgba(34, 211, 238, 0.55));
+}
+
+.slot-lv-short {
+  display: none;
 }
 
 .slot-badge.weapon {
@@ -995,4 +1006,459 @@ h2 {
 
 .dps-nums strong {
   color: #fff;
+}
+
+/* =========================================================================
+   Mobile Floating Virtual Joystick, Touch Dash & Safe-Area Responsive UI
+   ========================================================================= */
+#touch-controls {
+  display: none;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+body.touch-mode #touch-controls {
+  display: block;
+}
+
+body.touch-mode .hud-bottom-hint {
+  display: none;
+}
+
+#joystick-zone {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 72px;
+  bottom: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+#joy-base {
+  position: fixed;
+  left: calc(28px + env(safe-area-inset-left, 0px));
+  bottom: calc(30px + env(safe-area-inset-bottom, 0px));
+  width: 118px;
+  height: 118px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.16) 0%, rgba(8, 15, 34, 0.55) 75%);
+  border: 2px solid rgba(34, 211, 238, 0.52);
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.25), inset 0 0 14px rgba(34, 211, 238, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.58;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+#joy-base.active {
+  opacity: 0.96;
+  border-color: #67e8f9;
+  box-shadow: 0 0 26px rgba(34, 211, 238, 0.5);
+}
+
+#joy-knob {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #a5f3fc, #06b6d4 70%, #0e7490);
+  border: 2px solid #ecfeff;
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.85);
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+#btn-touch-dash {
+  --dash-pct: 100%;
+  position: fixed;
+  right: calc(24px + env(safe-area-inset-right, 0px));
+  bottom: calc(34px + env(safe-area-inset-bottom, 0px));
+  width: 84px;
+  height: 84px;
+  padding: 4px;
+  border-radius: 50%;
+  border: none;
+  background: conic-gradient(var(--cyan) var(--dash-pct), rgba(30, 41, 59, 0.78) 0);
+  box-shadow: 0 0 24px rgba(34, 211, 238, 0.45);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: pointer;
+  z-index: 6;
+  transition: transform 0.08s ease;
+}
+
+#btn-touch-dash:active,
+#btn-touch-dash.pressed {
+  transform: scale(0.91);
+}
+
+#btn-touch-dash.cooling {
+  box-shadow: 0 0 10px rgba(15, 23, 42, 0.65);
+}
+
+.dash-btn-inner {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, rgba(14, 116, 144, 0.94), rgba(9, 14, 30, 0.96));
+  border: 1.5px solid rgba(103, 232, 249, 0.65);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  color: #ecfeff;
+}
+
+.dash-btn-icon {
+  font-size: 22px;
+  line-height: 1;
+  filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.9));
+}
+
+.dash-btn-txt {
+  font-size: 11.5px;
+  font-weight: 900;
+  letter-spacing: 1px;
+}
+
+.overlay {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  padding:
+    calc(12px + env(safe-area-inset-top, 0px))
+    calc(14px + env(safe-area-inset-right, 0px))
+    calc(14px + env(safe-area-inset-bottom, 0px))
+    calc(14px + env(safe-area-inset-left, 0px));
+}
+
+/* Portrait & Compact Mobile Layout (<= 768px) */
+@media (max-width: 768px) {
+  .hud-top-row {
+    padding: 6px calc(10px + env(safe-area-inset-right, 0px)) 6px calc(10px + env(safe-area-inset-left, 0px));
+    gap: 6px;
+  }
+
+  .hud-left {
+    max-width: 44vw;
+    gap: 4px;
+  }
+
+  .hp-panel {
+    width: min(146px, 42vw);
+    height: 18px;
+  }
+
+  #hp-text {
+    font-size: 10.5px;
+  }
+
+  .dash-panel {
+    display: none; /* Replaced by dedicated radial touch Dash button + underfoot 3D arc */
+  }
+
+  .slot-badge {
+    padding: 2px 5px;
+    font-size: 10px;
+    gap: 3px;
+  }
+
+  .slot-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .slot-name-full {
+    display: none;
+  }
+
+  .slot-lv-short {
+    display: inline;
+  }
+
+  #timer-text {
+    font-size: 22px;
+    letter-spacing: 1px;
+  }
+
+  #wave-label {
+    font-size: 10px;
+    padding: 1px 8px;
+    white-space: nowrap;
+  }
+
+  #boss-banner {
+    width: min(230px, 56vw);
+    padding: 4px 7px;
+  }
+
+  #boss-name {
+    font-size: 10.5px;
+  }
+
+  .hud-right {
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 36vw;
+  }
+
+  .stat-enemies,
+  .stat-fps {
+    display: none;
+  }
+
+  .stat-pill {
+    padding: 5px 7px;
+    font-size: 11px;
+  }
+
+  .stat-pill strong {
+    font-size: 12px;
+  }
+
+  .hud-mini-btn {
+    min-width: 38px;
+    min-height: 36px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .combo-pill {
+    padding: 4px 7px;
+    font-size: 11px;
+  }
+
+  #toast-banner {
+    max-width: 90vw;
+    padding: 7px 14px;
+    font-size: 12px;
+    text-align: center;
+    border-radius: 14px;
+  }
+
+  /* Compact Horizontal Cards on Mobile so all 3 Mechs / 3 Upgrades fit without scrolling! */
+  .title-box,
+  .modal-box {
+    padding: 13px 14px;
+    border-radius: 12px;
+  }
+
+  .title-header-bar {
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .cyber-tag {
+    font-size: 9.5px;
+    letter-spacing: 1px;
+    padding: 2px 9px;
+  }
+
+  h1 {
+    font-size: 27px;
+    margin: 2px 0;
+  }
+
+  h1 span {
+    font-size: 11px;
+    letter-spacing: 4px;
+  }
+
+  h2 {
+    font-size: 19px;
+    margin: 4px 0 6px;
+  }
+
+  .subtitle,
+  .recipe-sub {
+    font-size: 11.5px;
+    margin-bottom: 8px;
+  }
+
+  .mech-grid,
+  .card-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin: 8px 0 10px;
+  }
+
+  .mech-card,
+  .upgrade-card {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    column-gap: 10px;
+    row-gap: 2px;
+    padding: 9px 10px;
+    align-items: center;
+  }
+
+  .mech-card .card-art-wrap,
+  .upgrade-card .card-art-wrap {
+    grid-row: 1 / span 4;
+    height: 78px;
+    width: 78px;
+    margin-bottom: 0;
+  }
+
+  .card-art-img {
+    width: 66px;
+    height: 66px;
+  }
+
+  .key-chip {
+    display: none;
+  }
+
+  .lv-chip {
+    left: 3px;
+    right: 3px;
+    bottom: 3px;
+    text-align: center;
+    font-size: 9px;
+    padding: 1px 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-title {
+    font-size: 14px;
+    margin-bottom: 1px;
+  }
+
+  .card-role {
+    font-size: 10.5px;
+    margin-bottom: 2px;
+  }
+
+  .card-desc {
+    font-size: 11px;
+    line-height: 1.35;
+    margin-bottom: 4px;
+  }
+
+  .card-pair-hint {
+    font-size: 10.5px;
+    padding-top: 4px;
+  }
+
+  .hangar-panel {
+    padding: 8px 9px;
+    margin-bottom: 10px;
+  }
+
+  .hangar-header {
+    font-size: 11px;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .hangar-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+
+  .hangar-item {
+    padding: 6px 6px;
+    min-height: 58px;
+  }
+
+  .hangar-name {
+    font-size: 11px;
+  }
+
+  .hangar-bonus {
+    font-size: 9.5px;
+  }
+
+  .title-btn-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .title-btn-row .neon-btn {
+    width: 100%;
+  }
+
+  .key-legend {
+    display: none;
+  }
+
+  .recipe-grid {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+
+  .audio-mixer-bar {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .slider-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .slider-group input[type="range"] {
+    width: 52%;
+  }
+
+  .modal-footer {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .modal-footer .neon-btn {
+    width: 100%;
+  }
+
+  .result-stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 7px;
+  }
+
+  .dps-row {
+    grid-template-columns: 122px 1fr 94px;
+    gap: 6px;
+    font-size: 11px;
+  }
+
+  .dps-wpn img {
+    width: 22px;
+    height: 22px;
+  }
+
+  .dps-nums {
+    font-size: 10.5px;
+  }
+}
+
+/* Landscape Mobile Tuning */
+@media (max-height: 520px) and (orientation: landscape) {
+  #joy-base {
+    width: 98px;
+    height: 98px;
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+
+  #joy-knob {
+    width: 40px;
+    height: 40px;
+  }
+
+  #btn-touch-dash {
+    width: 72px;
+    height: 72px;
+    bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mech-grid,
+  .card-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
