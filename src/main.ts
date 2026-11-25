@@ -205,17 +205,34 @@ class NeonOverdriveGame {
   private touchMoveX = 0;
   private touchMoveZ = 0;
 
-  // Player Mech Rig + World-Aligned Diegetic 3D Arc Gauges
+  // Player Mech Rig + Articulated Kits + World-Aligned Diegetic 3D Arc Gauges
   private playerGroup = new THREE.Group();
   private diegeticGroup = new THREE.Group();
   private hpArcSegs: THREE.Mesh[] = [];
   private dashArcSegs: THREE.Mesh[] = [];
   private frenzyHaloMesh!: THREE.Mesh;
   private chestKitMount = new THREE.Group();
+  private headArmorMount = new THREE.Group();
   private thrusterFlames: THREE.Mesh[] = [];
   private recoilZ = 0;
   private recoilVel = 0;
+  private yawVel = 0;
+  private wasDashing = false;
+  private landSquash = 0;
+  private landSquashVel = 0;
+  private weaponPulseTimer = 0;
+  private titlePoseTimer = 3.2;
   private kitMeshes: Record<string, THREE.Object3D> = {};
+  private helmMeshes: Record<string, THREE.Object3D> = {};
+  private strikerWings: {
+    ul?: THREE.Object3D;
+    ur?: THREE.Object3D;
+    ll?: THREE.Object3D;
+    lr?: THREE.Object3D;
+  } = {};
+  private aegisPods: { l?: THREE.Object3D; r?: THREE.Object3D } = {};
+  private nexusHalo: THREE.Object3D | null = null;
+  private nexusFunnels: THREE.Object3D[] = [];
   private playerArmorMats: THREE.MeshStandardMaterial[] = [];
   private animActions: Record<string, THREE.AnimationAction> = {};
   private activeLocoAction: THREE.AnimationAction | null = null;
@@ -378,9 +395,12 @@ class NeonOverdriveGame {
 
   private bossGroup = new THREE.Group();
   private bossTorsoNode: THREE.Object3D | null = null;
+  private bossHeadNode: THREE.Object3D | null = null;
   private bossLeftArmNode: THREE.Object3D | null = null;
   private bossRightArmNode: THREE.Object3D | null = null;
   private bossWingsNode: THREE.Object3D | null = null;
+  private bossWingNodesL: THREE.Object3D[] = [];
+  private bossWingNodesR: THREE.Object3D[] = [];
   private arenaRing!: THREE.Mesh;
   private arenaCenter = new THREE.Vector2();
 
@@ -562,9 +582,12 @@ class NeonOverdriveGame {
       for (const clip of robotGltf.animations) {
         this.animActions[clip.name] = this.mixer.clipAction(clip);
       }
-      if (this.animActions.Jump) {
-        this.animActions.Jump.setLoop(THREE.LoopOnce, 1);
-        this.animActions.Jump.clampWhenFinished = false;
+      for (const oneShotName of ['Jump', 'Punch', 'Wave', 'ThumbsUp']) {
+        const act = this.animActions[oneShotName];
+        if (act) {
+          act.setLoop(THREE.LoopOnce, 1);
+          act.clampWhenFinished = false;
+        }
       }
       if (this.animActions.Idle) {
         this.activeLocoAction = this.animActions.Idle;
@@ -573,6 +596,9 @@ class NeonOverdriveGame {
 
       this.chestKitMount.position.set(0, 1.18, 0.08);
       this.playerGroup.add(this.chestKitMount);
+      this.headArmorMount.position.set(0, 1.40, -0.02);
+      this.playerGroup.add(this.headArmorMount);
+
       const flameGeo = new THREE.ConeGeometry(0.14, 0.75, 8);
       flameGeo.rotateX(Math.PI / 2);
       flameGeo.translate(0, 0, 0.36);
@@ -593,6 +619,12 @@ class NeonOverdriveGame {
         this.thrusterFlames.push(fm);
       }
 
+      const saveRestPose = (obj: THREE.Object3D | null | undefined) => {
+        if (!obj) return;
+        obj.userData.basePos = obj.position.clone();
+        obj.userData.baseRot = obj.rotation.clone();
+      };
+
       const kitMap: Record<string, string> = {
         striker: 'Kit_Striker',
         aegis: 'Kit_Aegis',
@@ -612,6 +644,53 @@ class NeonOverdriveGame {
           this.chestKitMount.add(found);
         }
       }
+
+      const helmMap: Record<string, string> = {
+        striker: 'Helm_Striker',
+        aegis: 'Helm_Aegis',
+        nexus: 'Helm_Nexus',
+      };
+      for (const [mechId, helmName] of Object.entries(helmMap)) {
+        const hNode = armoryGltf.scene.getObjectByName(helmName);
+        if (hNode) {
+          hNode.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) {
+              o.castShadow = true;
+              const hm = (o as THREE.Mesh).material as THREE.MeshStandardMaterial;
+              if (hm && hm.emissiveIntensity > 0.85) hm.emissiveIntensity = 0.85;
+            }
+          });
+          this.helmMeshes[mechId] = hNode;
+          this.headArmorMount.add(hNode);
+        }
+      }
+
+      // Cache articulated sub-nodes for live mechanical animation!
+      this.strikerWings = {
+        ul: this.kitMeshes.striker?.getObjectByName('Striker_WingUL'),
+        ur: this.kitMeshes.striker?.getObjectByName('Striker_WingUR'),
+        ll: this.kitMeshes.striker?.getObjectByName('Striker_WingLL'),
+        lr: this.kitMeshes.striker?.getObjectByName('Striker_WingLR'),
+      };
+      Object.values(this.strikerWings).forEach(saveRestPose);
+
+      this.aegisPods = {
+        l: this.kitMeshes.aegis?.getObjectByName('Aegis_PodL'),
+        r: this.kitMeshes.aegis?.getObjectByName('Aegis_PodR'),
+      };
+      Object.values(this.aegisPods).forEach(saveRestPose);
+
+      this.nexusHalo = this.kitMeshes.nexus?.getObjectByName('Nexus_Halo') || null;
+      saveRestPose(this.nexusHalo);
+      this.nexusFunnels = [];
+      for (let fi = 0; fi < 6; fi++) {
+        const fn = this.kitMeshes.nexus?.getObjectByName(`Nexus_Funnel_${fi}`);
+        if (fn) {
+          saveRestPose(fn);
+          this.nexusFunnels.push(fn);
+        }
+      }
+
       this.applySelectedMechVisuals();
 
       // Replace Enemy Pools 0..3 + Type 4 Sniper Drone
@@ -669,9 +748,32 @@ class NeonOverdriveGame {
         }
       });
       this.bossTorsoNode = bossRoot.getObjectByName('Boss_Torso') || null;
+      this.bossHeadNode = bossRoot.getObjectByName('Boss_Head') || null;
       this.bossLeftArmNode = bossRoot.getObjectByName('Boss_LeftArm') || null;
       this.bossRightArmNode = bossRoot.getObjectByName('Boss_RightArm') || null;
       this.bossWingsNode = bossRoot.getObjectByName('Boss_Wings') || null;
+      this.bossWingNodesL = [];
+      this.bossWingNodesR = [];
+      for (let wi = 0; wi < 3; wi++) {
+        const wl = bossRoot.getObjectByName(`Boss_WingL_${wi}`);
+        const wr = bossRoot.getObjectByName(`Boss_WingR_${wi}`);
+        if (wl) {
+          wl.userData.baseRot = wl.rotation.clone();
+          this.bossWingNodesL.push(wl);
+        }
+        if (wr) {
+          wr.userData.baseRot = wr.rotation.clone();
+          this.bossWingNodesR.push(wr);
+        }
+      }
+      for (const bn of [
+        this.bossTorsoNode,
+        this.bossHeadNode,
+        this.bossLeftArmNode,
+        this.bossRightArmNode,
+      ]) {
+        if (bn) bn.userData.baseRot = bn.rotation.clone();
+      }
       this.bossGroup.add(bossRoot);
 
       // Map Props + Biome-Specific Landmark Geometries (Pylon / FoundryCore / CryoObelisk)
@@ -826,8 +928,101 @@ class NeonOverdriveGame {
     for (const [id, obj] of Object.entries(this.kitMeshes)) {
       obj.visible = id === m.id;
     }
+    for (const [id, obj] of Object.entries(this.helmMeshes)) {
+      obj.visible = id === m.id;
+    }
     for (const fm of this.thrusterFlames) {
       (fm.material as THREE.MeshBasicMaterial).color.setHex(m.color);
+    }
+  }
+
+  private panAt(worldX: number): number {
+    return Math.max(-0.85, Math.min(0.85, (worldX - this.px) / 15.5));
+  }
+
+  private playCombatGesture(
+    clipName: 'Punch' | 'Wave' | 'ThumbsUp',
+    speed = 1.65,
+    weight = 0.85
+  ): void {
+    const act = this.animActions[clipName];
+    if (!act) return;
+    act.reset();
+    act.setLoop(THREE.LoopOnce, 1);
+    act.clampWhenFinished = false;
+    act.timeScale = speed;
+    act.setEffectiveWeight(weight);
+    act.fadeIn(0.05).play();
+  }
+
+  private animatePlayerKitParts(dt: number, speedNorm: number): void {
+    if (this.weaponPulseTimer > 0) {
+      this.weaponPulseTimer = Math.max(0, this.weaponPulseTimer - dt);
+    }
+    const flare = Math.min(
+      1.0,
+      (this.frenzyTimer > 0 ? 0.85 : 0) +
+        (this.dashActiveTimer > 0 ? 1.0 : 0) +
+        this.weaponPulseTimer * 1.4 +
+        speedNorm * 0.22
+    );
+
+    // 1. STRIKER-0: 4 Articulated Aero-Wing Binders Dynamic Sweep & Flare
+    if (this.kitMeshes.striker?.visible) {
+      const vib = Math.sin(this.runTime * 34) * 0.025 * flare;
+      const applyWing = (
+        w: THREE.Object3D | undefined,
+        sign: number,
+        upper: boolean
+      ) => {
+        if (!w || !w.userData.baseRot) return;
+        const br = w.userData.baseRot as THREE.Euler;
+        const spreadZ = sign * flare * (upper ? 0.28 : 0.18);
+        const sweepY = -sign * flare * (upper ? 0.16 : -0.14);
+        w.rotation.set(br.x + vib, br.y + sweepY, br.z - spreadZ);
+      };
+      applyWing(this.strikerWings.ul, -1, true);
+      applyWing(this.strikerWings.ur, 1, true);
+      applyWing(this.strikerWings.ll, -1, false);
+      applyWing(this.strikerWings.lr, 1, false);
+    }
+
+    // 2. AEGIS-IV: Twin 6-Tube Shoulder Missile Pods Hydraulic Recoil & Aiming
+    if (this.kitMeshes.aegis?.visible) {
+      const podKick = Math.max(0, this.recoilZ) * 0.55 + this.weaponPulseTimer * 0.14;
+      for (const [idx, pod] of [this.aegisPods.l, this.aegisPods.r].entries()) {
+        if (!pod || !pod.userData.basePos || !pod.userData.baseRot) continue;
+        const bp = pod.userData.basePos as THREE.Vector3;
+        const br = pod.userData.baseRot as THREE.Euler;
+        const alt = Math.sin(this.runTime * 7 + idx * Math.PI) * 0.025;
+        pod.position.set(bp.x, bp.y + alt, bp.z + podKick);
+        pod.rotation.set(br.x - podKick * 0.85, br.y, br.z);
+      }
+    }
+
+    // 3. NEXUS-9: Rotating Dorsal Halo + 6 Independently Orbiting Fin-Funnels!
+    if (this.kitMeshes.nexus?.visible) {
+      if (this.nexusHalo) {
+        this.nexusHalo.rotation.z += dt * (this.frenzyTimer > 0 ? 4.4 : 1.65);
+      }
+      const orbitSpd = this.frenzyTimer > 0 ? 2.9 : 1.15 + flare * 0.9;
+      const radX = 0.88 + flare * 0.36;
+      const radY = 0.58 + flare * 0.24;
+      for (let i = 0; i < this.nexusFunnels.length; i++) {
+        const fn = this.nexusFunnels[i];
+        const a = this.runTime * orbitSpd + (i / 6) * Math.PI * 2;
+        const bob = Math.sin(this.runTime * 4.5 + i * 1.1) * 0.08;
+        fn.position.set(
+          Math.cos(a) * radX,
+          0.18 + Math.sin(a) * radY + bob,
+          0.36 - flare * 0.16
+        );
+        fn.rotation.set(
+          -0.25 - flare * 0.55,
+          Math.cos(a) * 0.25,
+          a - Math.PI * 0.5
+        );
+      }
     }
   }
 
@@ -1110,7 +1305,7 @@ class NeonOverdriveGame {
         anyBroken = true;
         this.vfx.spawnBurst(p.x, 0.7, p.z, 0xff6b00, 24, 12);
         this.vfx.spawnRing(p.x, p.z, 4.8, 0xfbbf24, 0.36);
-        this.audio.playExplosion(true);
+        this.audio.playExplosion(true, this.panAt(p.x));
         this.triggerHitstop(0.055, 0.04);
         this.addTrauma(0.36);
         this.punchCamera(-125, 0.045);
@@ -1826,6 +2021,7 @@ class NeonOverdriveGame {
 
   private kickWeaponRecoil(impulse: number): void {
     this.recoilVel += impulse;
+    this.weaponPulseTimer = Math.max(this.weaponPulseTimer, 0.28);
   }
 
   private addOverdriveCharge(amount: number): void {
@@ -1836,6 +2032,9 @@ class NeonOverdriveGame {
     if (this.screen !== 'playing' || this.overdriveCharge < 100) return;
     this.overdriveCharge = 0;
     this.iFrameTimer = Math.max(this.iFrameTimer, 2.2);
+    this.weaponPulseTimer = 1.1;
+    this.landSquashVel -= 5.2;
+    this.playCombatGesture('Punch', 1.45, 0.95);
     this.audio.playOverdriveUltimate();
     this.triggerHitstop(0.085, 0.04);
     this.addTrauma(0.72);
@@ -1936,6 +2135,12 @@ class NeonOverdriveGame {
     this.dashActiveTimer = 0;
     this.dashBoostMagTimer = 0;
     this.frenzyTimer = 0;
+    this.yawVel = 0;
+    this.wasDashing = false;
+    this.landSquash = 0;
+    this.landSquashVel = 0;
+    this.weaponPulseTimer = 0;
+    this.playerGroup.scale.set(1, 1, 1);
     this.revivesLeft = this.metaSave.upgrades.phoenix || 0;
     this.overdriveCharge = 50;
 
@@ -2161,8 +2366,16 @@ class NeonOverdriveGame {
         this.updateHud();
       }
     } else if (this.screen === 'title') {
+      this.runTime += rawDt;
       if (this.mixer) this.mixer.update(rawDt);
       this.playerGroup.rotation.y += rawDt * 0.85;
+      this.headArmorMount.position.set(0, 1.40 + Math.sin(this.runTime * 3) * 0.03, -0.02);
+      this.animatePlayerKitParts(rawDt, 0.35);
+      this.titlePoseTimer -= rawDt;
+      if (this.titlePoseTimer <= 0) {
+        this.titlePoseTimer = 5.5 + Math.random() * 2.5;
+        this.playCombatGesture(Math.random() < 0.6 ? 'Punch' : 'Wave', 1.35, 0.8);
+      }
     }
 
     this.updateCamera(rawDt);
@@ -2286,7 +2499,7 @@ class NeonOverdriveGame {
       if (sh.age >= sh.dur) {
         sh.active = false;
         sh.group.visible = false;
-        this.audio.playHazardErupt(sh.cryo);
+        this.audio.playHazardErupt(sh.cryo, this.panAt(sh.x));
         if (sh.cryo) {
           // Cryo Pulse: Freezes/slows enemies by 55% for 4.5s + light cryo damage!
           this.vfx.spawnRing(sh.x, sh.z, sh.radius * 1.15, 0x67e8f9, 0.48);
@@ -2472,6 +2685,7 @@ class NeonOverdriveGame {
     }
 
     const len = moveMag;
+    let targetYawVel = 0;
     if (len > 0.001) {
       const dirX = ix / Math.max(0.0001, Math.hypot(ix, iz));
       const dirZ = iz / Math.max(0.0001, Math.hypot(ix, iz));
@@ -2479,10 +2693,14 @@ class NeonOverdriveGame {
       let diff = targetYaw - this.facingYaw;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      this.facingYaw += diff * (1 - Math.exp(-18 * dt));
+      const stepYaw = diff * (1 - Math.exp(-18 * dt));
+      this.facingYaw += stepYaw;
+      targetYawVel = stepYaw / Math.max(0.001, dt);
     }
+    this.yawVel += (targetYawVel - this.yawVel) * (1 - Math.exp(-14 * rawDt));
 
     if (this.dashActiveTimer > 0) {
+      this.wasDashing = true;
       this.dashActiveTimer -= rawDt;
       const burstRatio = Math.max(0, this.dashActiveTimer / 0.145);
       const burstSpd = 22 + 28 * burstRatio;
@@ -2502,8 +2720,16 @@ class NeonOverdriveGame {
         this.damageCircle(this.px, this.pz, 2.3, slashDmg, 8, 0x22d3ee, 'kunai');
       }
     } else {
+      if (this.wasDashing) {
+        this.wasDashing = false;
+        // Landing squash impulse after high-speed phase dash!
+        this.landSquashVel -= 4.2;
+      }
       const spd = this.getMoveSpeed();
       this.transitionLocomotion(len > 0.01);
+      if (this.isMovingAnim && this.animActions.Running) {
+        this.animActions.Running.timeScale = 1.15 + Math.min(0.65, (spd - 7.5) * 0.12);
+      }
       const rate = len > 0.01 ? 18 : 22;
       const damp = 1 - Math.exp(-rate * dt);
       this.pvx += (ix * spd - this.pvx) * damp;
@@ -2538,17 +2764,29 @@ class NeonOverdriveGame {
     this.recoilVel += rForce * rawDt;
     this.recoilZ = Math.max(-0.25, Math.min(0.35, this.recoilZ + this.recoilVel * rawDt));
 
+    // Volume-preserving squash-and-stretch spring on dash landing & ultimate slam!
+    const sqForce = -260 * this.landSquash - 19 * this.landSquashVel;
+    this.landSquashVel += sqForce * rawDt;
+    this.landSquash = Math.max(-0.22, Math.min(0.22, this.landSquash + this.landSquashVel * rawDt));
+    const sy = 1 + this.landSquash + (this.dashActiveTimer > 0 ? 0.08 : 0);
+    const sxz = 1 / Math.sqrt(Math.max(0.65, sy));
+
     this.playerGroup.position.set(this.px, 0, this.pz);
+    this.playerGroup.scale.set(sxz, sy, sxz);
     this.playerGroup.rotation.y = -this.facingYaw;
-    this.playerGroup.rotation.z = Math.max(-0.18, Math.min(0.18, -this.pvx * 0.016));
+    const bankRoll = Math.max(-0.24, Math.min(0.24, -this.pvx * 0.012 - this.yawVel * 0.018));
+    this.playerGroup.rotation.z = bankRoll;
     this.playerGroup.rotation.x =
-      Math.max(-0.22, Math.min(0.22, this.pvz * 0.016)) - this.recoilZ * 0.35;
+      Math.max(-0.22, Math.min(0.22, this.pvz * 0.015)) - this.recoilZ * 0.35;
 
     const bob =
       len > 0.01 ? Math.abs(Math.sin(this.runTime * 12)) * 0.08 : Math.sin(this.runTime * 3) * 0.04;
     this.chestKitMount.position.set(0, 1.18 + bob, 0.08 + this.recoilZ);
+    this.headArmorMount.position.set(0, 1.40 + bob * 1.08, -0.02 + this.recoilZ * 0.45);
+    this.headArmorMount.rotation.set(-this.recoilZ * 0.3, 0, bankRoll * 0.25);
 
     const speedNorm = Math.min(2.6, Math.hypot(this.pvx, this.pvz) / 8.0);
+    this.animatePlayerKitParts(rawDt, speedNorm);
     const flicker = 0.85 + Math.sin(this.runTime * 48) * 0.2;
     for (const fm of this.thrusterFlames) {
       fm.visible = speedNorm > 0.08;
@@ -3021,7 +3259,7 @@ class NeonOverdriveGame {
                 Math.round(14 * this.currentStage.enemyHpMult)
               );
               this.vfx.spawnHitFlare(this.eX[i] + nx * 0.6, 0.95, this.eZ[i] + nz * 0.6, 0xff2a55, 1.1);
-              this.audio.playSniperShot();
+              this.audio.playSniperShot(this.panAt(this.eX[i]));
             }
           }
         } else {
@@ -3056,18 +3294,49 @@ class NeonOverdriveGame {
       const slot = this.typeSlotCounts[type]++;
       const im = this.enemyMeshes[type];
       const baseScale = elite ? 1.85 : 1.08;
-      const stridePhase = this.runTime * (type <= 1 ? 14 : 9) + i * 1.7;
-      const walkBob =
-        type === 4
-          ? Math.sin(stridePhase * 0.6) * 0.14
-          : Math.abs(Math.sin(stridePhase)) * (type === 3 ? 0.05 : 0.11);
-      const walkRoll = Math.sin(stridePhase) * (type <= 1 ? 0.09 : 0.05);
+      const strideFreq = [16.5, 15.0, 8.8, 6.8, 4.2][type];
+      const stridePhase = this.runTime * strideFreq * chillMult + i * 1.7;
+
+      let walkBob = 0;
+      let walkPitch = 0;
+      let walkRoll = 0;
+      if (type === 0) {
+        // Crawler: Rapid low-slung arachnid scuttle & pounce
+        walkBob = Math.abs(Math.sin(stridePhase)) * 0.11;
+        walkPitch = Math.sin(stridePhase * 2) * 0.07;
+        walkRoll = Math.sin(stridePhase) * 0.11;
+      } else if (type === 1) {
+        // Kamikaze: Frantic tick waddle; pitches forward aggressively when fuse lit!
+        walkBob = Math.abs(Math.sin(stridePhase)) * 0.12;
+        walkPitch = this.eFuse[i] > 0 ? 0.28 : Math.sin(stridePhase * 2) * 0.06;
+        walkRoll = Math.sin(stridePhase) * 0.13;
+      } else if (type === 2) {
+        // ShieldMech: Disciplined forward shield-brace march
+        walkBob = Math.abs(Math.sin(stridePhase)) * 0.085;
+        walkPitch = 0.07 + Math.abs(Math.cos(stridePhase)) * 0.03;
+        walkRoll = Math.sin(stridePhase) * 0.055;
+      } else if (type === 3) {
+        // Juggernaut: Heavy ground-slam dreadnought stomp
+        walkBob = Math.pow(Math.abs(Math.sin(stridePhase)), 0.65) * 0.075;
+        walkPitch = Math.sin(stridePhase * 2) * 0.035;
+        walkRoll = Math.sin(stridePhase) * 0.065;
+      } else {
+        // SniperDrone: Aerodynamic strafe bank + sharp railgun firing kickback!
+        const strafeSign = i % 2 === 0 ? 1 : -1;
+        const shotKick = Math.max(0, this.eShootTimer[i] - 2.45) / 0.3;
+        walkBob = Math.sin(stridePhase) * 0.15;
+        walkPitch = shotKick > 0 ? -shotKick * 0.34 : 0.09;
+        walkRoll = strafeSign * 0.18 + Math.cos(stridePhase) * 0.05;
+      }
+
+      // Add knockback tumble tilt
+      const kbMag = Math.min(0.28, Math.hypot(this.eKx[i], this.eKz[i]) * 0.03);
       const fusePulse =
-        type === 1 && this.eFuse[i] > 0 ? 1 + Math.sin(this.eFuse[i] * 35) * 0.28 : 1;
+        type === 1 && this.eFuse[i] > 0 ? 1 + Math.sin(this.eFuse[i] * 38) * 0.3 : 1;
 
       const sFinal = baseScale * fusePulse;
       this.dummy.position.set(this.eX[i] + jitterX, walkBob, this.eZ[i]);
-      this.dummy.rotation.set(0, Math.atan2(dx, dz), walkRoll);
+      this.dummy.rotation.set(walkPitch - kbMag, Math.atan2(dx, dz), walkRoll);
       this.dummy.scale.set(sFinal * sxz, sFinal * sy, sFinal * sxz);
       this.dummy.updateMatrix();
       im.setMatrixAt(slot, this.dummy.matrix);
@@ -3111,7 +3380,7 @@ class NeonOverdriveGame {
 
     this.vfx.spawnBurst(x, 0.5, z, 0xf97316, 16, 10);
     this.vfx.spawnRing(x, z, 3.4, 0xf97316, 0.26);
-    this.audio.playExplosion(false);
+    this.audio.playExplosion(false, this.panAt(x));
     this.addTrauma(0.24);
     this.punchCamera(-75, 0.025);
 
@@ -3289,7 +3558,7 @@ class NeonOverdriveGame {
         this.vfx.spawnSkyPillar(bm.x, bm.z, bm.radius * 0.55, 0xf43f5e, 0.32);
         this.vfx.spawnRing(bm.x, bm.z, bm.radius * 1.15, 0xf43f5e, 0.3);
         this.vfx.spawnBurst(bm.x, 0.4, bm.z, 0xf43f5e, 12, 9);
-        this.audio.playExplosion(false);
+        this.audio.playExplosion(false, this.panAt(bm.x));
         this.addTrauma(0.18);
         if (
           Math.hypot(this.px - bm.x, this.pz - bm.z) < bm.radius &&
@@ -3311,21 +3580,106 @@ class NeonOverdriveGame {
       if (this.hitstopTimer > 0) bJit = Math.sin(this.hitstopTimer * 210) * 0.12;
     }
 
-    const stompBob = Math.abs(Math.sin(this.runTime * 5.5)) * 0.16;
-    this.bossGroup.position.set(this.bossX + bJit, stompBob, this.bossZ);
+    const isWindup =
+      this.bossMode === 'charge_windup' ||
+      this.bossMode === 'laser_windup' ||
+      this.bossMode === 'meteor_windup';
+    if (isWindup) {
+      bJit += Math.sin(this.runTime * 68) * 0.06;
+    }
+
+    const crouchY =
+      this.bossMode === 'charge_windup'
+        ? -0.18
+        : this.bossMode === 'charge_dash'
+        ? 0.08
+        : Math.abs(Math.sin(this.runTime * 5.5)) * 0.16;
+    this.bossGroup.position.set(this.bossX + bJit, crouchY, this.bossZ);
     this.bossGroup.scale.set(bSxz, bSy, bSxz);
 
+    // Mode-Specific Cyber-Shogun Skeletal Pose Choreography
+    const blend = 1 - Math.exp(-11 * rawDt);
+    let tTorsoX = 0.05;
+    let tTorsoY = Math.sin(this.runTime * 3.2) * 0.18;
+    let tHeadX = 0;
+    let tLeftX = Math.sin(this.runTime * 4.5) * 0.45;
+    let tLeftZ = 0;
+    let tRightX = -0.15 + Math.cos(this.runTime * 6.0) * 0.12;
+    let tRightZ = 0;
+    let wingSpread = 0;
+    let wingFlap = Math.sin(this.runTime * 4.5) * 0.08;
+
+    if (this.bossMode === 'charge_windup') {
+      // Predatory samurai crouch, Odachi greatsword coiled back
+      tTorsoX = 0.36;
+      tTorsoY = 0.42;
+      tHeadX = -0.28;
+      tLeftX = 0.85;
+      tLeftZ = 0.35;
+      tRightX = 0.45;
+      wingSpread = -0.22;
+      wingFlap = Math.sin(this.runTime * 28) * 0.05;
+    } else if (this.bossMode === 'charge_dash') {
+      // Full-speed lunging slash!
+      tTorsoX = 0.24;
+      tTorsoY = -0.46;
+      tLeftX = -1.28;
+      tLeftZ = -0.25;
+      tRightX = 0.35;
+      wingSpread = 0.34;
+    } else if (this.bossMode === 'laser_windup' || this.bossMode === 'laser_sweep') {
+      // Cruciform Seraphim Cross-Laser Channeling Stance
+      tTorsoX = -0.06;
+      tTorsoY = 0;
+      tLeftX = -0.65;
+      tLeftZ = -0.92;
+      tRightX = -0.65;
+      tRightZ = 0.92;
+      wingSpread = 0.38;
+      wingFlap = Math.sin(this.runTime * 14) * 0.12;
+    } else if (this.bossMode === 'meteor_windup') {
+      // Skyward Orbital Invocation Stance!
+      tTorsoX = -0.18;
+      tTorsoY = 0;
+      tHeadX = -0.45;
+      tLeftX = -2.15;
+      tRightX = -2.15;
+      wingSpread = 0.44;
+      wingFlap = Math.sin(this.runTime * 18) * 0.16;
+    }
+
     if (this.bossTorsoNode) {
-      this.bossTorsoNode.rotation.y = Math.sin(this.runTime * 3.2) * 0.18;
+      this.bossTorsoNode.rotation.x += (tTorsoX - this.bossTorsoNode.rotation.x) * blend;
+      this.bossTorsoNode.rotation.y += (tTorsoY - this.bossTorsoNode.rotation.y) * blend;
+    }
+    if (this.bossHeadNode) {
+      this.bossHeadNode.rotation.x += (tHeadX - this.bossHeadNode.rotation.x) * blend;
     }
     if (this.bossLeftArmNode) {
-      this.bossLeftArmNode.rotation.x = Math.sin(this.runTime * 4.5) * 0.45;
+      this.bossLeftArmNode.rotation.x += (tLeftX - this.bossLeftArmNode.rotation.x) * blend;
+      this.bossLeftArmNode.rotation.z += (tLeftZ - this.bossLeftArmNode.rotation.z) * blend;
     }
     if (this.bossRightArmNode) {
-      this.bossRightArmNode.rotation.x = -0.15 + Math.cos(this.runTime * 6.0) * 0.12;
+      this.bossRightArmNode.rotation.x += (tRightX - this.bossRightArmNode.rotation.x) * blend;
+      this.bossRightArmNode.rotation.z += (tRightZ - this.bossRightArmNode.rotation.z) * blend;
     }
     if (this.bossWingsNode) {
-      this.bossWingsNode.scale.setScalar(1 + Math.sin(this.runTime * 4.0) * 0.08);
+      const targetWS = 1 + wingSpread * 0.35 + Math.sin(this.runTime * 4.0) * 0.05;
+      const curWS = this.bossWingsNode.scale.x;
+      this.bossWingsNode.scale.setScalar(curWS + (targetWS - curWS) * blend);
+    }
+    for (let wi = 0; wi < 3; wi++) {
+      const phase = wingFlap * (1 + wi * 0.25);
+      const wl = this.bossWingNodesL[wi];
+      if (wl && wl.userData.baseRot) {
+        const br = wl.userData.baseRot as THREE.Euler;
+        wl.rotation.set(br.x, br.y + phase, br.z + wingSpread);
+      }
+      const wr = this.bossWingNodesR[wi];
+      if (wr && wr.userData.baseRot) {
+        const br = wr.userData.baseRot as THREE.Euler;
+        wr.rotation.set(br.x, br.y - phase, br.z - wingSpread);
+      }
     }
 
     if (
@@ -3428,9 +3782,11 @@ class NeonOverdriveGame {
           (hyper ? WEAPONS.saw.hyperCooldown : WEAPONS.saw.baseCooldown) * cdMult;
         const dmg =
           (hyper ? WEAPONS.saw.hyperDamage : WEAPONS.saw.baseDamage + (sawLv - 1) * 4) * dmgMult;
+        let sawHits = 0;
+        let lastSawX = this.px;
         for (let b = 0; b < bladeCount; b++) {
           const m = this.sawMeshes[b];
-          this.damageCircle(
+          const h = this.damageCircle(
             m.position.x,
             m.position.z,
             1.15 * areaMult,
@@ -3439,6 +3795,13 @@ class NeonOverdriveGame {
             hyper ? 0xfbbf24 : 0xf43f5e,
             'saw'
           );
+          if (h > 0) {
+            sawHits += h;
+            lastSawX = m.position.x;
+          }
+        }
+        if (sawHits > 0) {
+          this.audio.playSawHit(hyper, this.panAt(lastSawX));
         }
       }
     } else {
@@ -3481,6 +3844,7 @@ class NeonOverdriveGame {
         this.laserIsHyper = hyper;
         this.laserTickTimer = 0;
         this.kickWeaponRecoil(4.5);
+        this.playCombatGesture('Punch', 1.85, 0.65);
         this.punchCamera(hyper ? -95 : -55, 0.02);
         this.audio.playLaser(hyper);
         this.addTrauma(hyper ? 0.26 : 0.14);
@@ -3556,11 +3920,13 @@ class NeonOverdriveGame {
         const tickDmg = (hyper ? def.hyperDamage : def.baseDamage + (gravLv - 1) * 4) * dmgMult;
         const collapseDmg = (hyper ? 195 : 70 + gravLv * 12) * dmgMult;
 
+        let lastWellX = this.px;
         for (let k = 0; k < count; k++) {
           const target = this.pickEnemyClusterTarget(14);
+          lastWellX = target.x;
           this.spawnGravityWell(target.x, target.z, radius, dur, tickDmg, collapseDmg, hyper);
         }
-        this.audio.playGravityWell(false, hyper);
+        this.audio.playGravityWell(false, hyper, this.panAt(lastWellX));
       }
     }
 
@@ -3682,7 +4048,7 @@ class NeonOverdriveGame {
       if (gw.age >= gw.dur) {
         gw.active = false;
         gw.group.visible = false;
-        this.audio.playGravityWell(true, gw.hyper);
+        this.audio.playGravityWell(true, gw.hyper, this.panAt(gw.x));
         this.vfx.spawnRing(gw.x, gw.z, gw.radius * 1.25, gw.hyper ? 0xf472b6 : 0xe879f9, 0.42);
         this.vfx.spawnBurst(
           gw.x,
@@ -3756,7 +4122,7 @@ class NeonOverdriveGame {
           this.vfx.spawnRing(os.x, os.z, os.radius * 1.65, 0xf97316, 0.48);
         }
         this.vfx.spawnBurst(os.x, 0.4, os.z, col, os.hyper ? 22 : 12, 10);
-        this.audio.playOrbitalStrike(os.hyper);
+        this.audio.playOrbitalStrike(os.hyper, this.panAt(os.x));
         this.addTrauma(os.hyper ? 0.3 : 0.16);
         this.punchCamera(os.hyper ? -85 : -45, 0.025);
         this.damageCircle(os.x, os.z, os.radius, os.dmg, os.hyper ? 15 : 10, col, 'orbital');
@@ -3945,19 +4311,23 @@ class NeonOverdriveGame {
     colorHex: number,
     weaponId?: WeaponId,
     checkBarrels = true
-  ): void {
+  ): number {
+    let hits = 0;
     if (checkBarrels) this.damageBarrelsInRadius(cx, cz, radius);
     this.forEachEnemyInRadius(cx, cz, radius, (i, dx, dz, d2) => {
       const d = Math.max(0.1, Math.sqrt(d2));
       this.damageEnemy(i, dmg, (dx / d) * knock, (dz / d) * knock, colorHex, weaponId);
+      hits++;
     });
     if (this.bossActive) {
       const bdx = this.bossX - cx;
       const bdz = this.bossZ - cz;
       if (bdx * bdx + bdz * bdz < (radius + 2.0) * (radius + 2.0)) {
         this.damageBoss(dmg, weaponId);
+        hits++;
       }
     }
+    return hits;
   }
 
   private damageBeamSegment(
@@ -4078,7 +4448,7 @@ class NeonOverdriveGame {
     if (crit || finalDmg >= 45 || Math.random() < 0.38) {
       this.vfx.spawnDamageNumber(this.eX[idx], this.eZ[idx], finalDmg, crit);
     }
-    this.audio.playHit(crit);
+    this.audio.playHit(crit, this.panAt(this.eX[idx]));
 
     if (this.eHp[idx] <= 0) {
       const x = this.eX[idx];
@@ -4092,7 +4462,7 @@ class NeonOverdriveGame {
 
       this.comboCount++;
       this.comboTimer = 2.2;
-      this.audio.playKillCrunch(this.comboCount);
+      this.audio.playKillCrunch(this.comboCount, this.panAt(x));
       if (this.comboCount >= 5) {
         const label =
           this.comboCount >= 50
@@ -4120,7 +4490,7 @@ class NeonOverdriveGame {
         this.triggerHitstop(0.075, 0.03);
         this.addTrauma(0.45);
         this.punchCamera(-130, 0.05);
-        this.audio.playExplosion(true);
+        this.audio.playExplosion(true, this.panAt(x));
         this.spawnChest(x, z);
         this.spawnPowerUp(x + 1.4, z, Math.random() < 0.5 ? 'frenzy' : 'magnet');
       } else {
@@ -4415,6 +4785,9 @@ class NeonOverdriveGame {
         this.weaponHyper[wid] = true;
         this.dpsTracker.onHyper(wid);
         this.hp = Math.min(this.maxHp, this.hp + 45);
+        this.landSquashVel -= 4.6;
+        this.weaponPulseTimer = 1.0;
+        this.playCombatGesture('ThumbsUp', 1.35, 0.9);
         this.audio.playFanfare(true);
         this.vfx.spawnSkyPillar(this.px, this.pz, 2.8, 0xfef08a, 0.5);
         this.vfx.spawnRing(this.px, this.pz, 14, 0xfbbf24, 0.65);
@@ -4477,6 +4850,7 @@ class NeonOverdriveGame {
     grid.querySelectorAll('.stage-card').forEach((el) => {
       el.addEventListener('click', () => {
         this.audio.unlock();
+        this.audio.playUiClick(true);
         this.selectedStageIdx = Number((el as HTMLElement).dataset.stg);
         this.applyStageEnvironment();
         this.renderStageSelector();
@@ -4602,6 +4976,7 @@ class NeonOverdriveGame {
   private selectUpgrade(index: number): void {
     const choice = this.currentChoices[index];
     if (!choice) return;
+    this.audio.playUiClick(true);
 
     if (choice.kind === 'weapon' && choice.weaponId) {
       this.weaponLevels[choice.weaponId] = (this.weaponLevels[choice.weaponId] || 0) + 1;
@@ -4715,7 +5090,11 @@ class NeonOverdriveGame {
 
     grid.querySelectorAll('.mech-card').forEach((el) => {
       el.addEventListener('click', () => {
+        this.audio.unlock();
+        this.audio.playUiClick(true);
         this.selectedMechIdx = Number((el as HTMLElement).dataset.idx);
+        this.weaponPulseTimer = 0.85;
+        this.playCombatGesture('Punch', 1.5, 0.9);
         this.renderTitleCards();
       });
       el.addEventListener('dblclick', () => {
