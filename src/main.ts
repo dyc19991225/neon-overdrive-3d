@@ -8,10 +8,13 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import {
   MECHS,
   PASSIVES,
+  STAGES,
   WEAPONS,
+  getDailyChallengeSpec,
   xpForNextLevel,
   type MechDef,
   type PassiveId,
+  type StageDef,
   type WeaponId,
 } from './config';
 import {
@@ -30,6 +33,7 @@ import { VfxSystem } from './vfx';
 
 const MAX_ENEMIES = 1200;
 const MAX_PROJ = 460;
+const MAX_EPROJ = 80;
 const MAX_GEMS = 720;
 const MAX_SAW_BLADES = 10;
 const MAX_LASER_BEAMS = 4;
@@ -37,6 +41,7 @@ const MAX_GRAVITY_WELLS = 8;
 const MAX_ORBITAL_STRIKES = 18;
 const MAX_POWERUPS = 10;
 const MAX_BOSS_METEORS = 12;
+const MAX_STAGE_HAZARDS = 8;
 const MAX_OFFSCREEN_INDICATORS = 8;
 const MAX_MAP_PROPS = 96;
 const MAP_CHUNK = 22;
@@ -128,6 +133,19 @@ interface BossMeteorSlot {
   fillDisk: THREE.Mesh;
 }
 
+interface StageHazardSlot {
+  active: boolean;
+  cryo: boolean;
+  x: number;
+  z: number;
+  radius: number;
+  age: number;
+  dur: number;
+  group: THREE.Group;
+  rim: THREE.Mesh;
+  fill: THREE.Mesh;
+}
+
 interface ActiveMapProp {
   key: string;
   kind: 0 | 1 | 2;
@@ -152,13 +170,16 @@ class NeonOverdriveGame {
   private texLoader = new THREE.TextureLoader();
   private modelsLoaded = false;
 
-  // Persistent Meta-Hangar Save & Per-Weapon DPS Tracker
   private metaSave: MetaSaveData;
   private dpsTracker = new WeaponDpsTracker();
 
   public screen: ScreenState = 'title';
   private selectedMechIdx = 0;
+  private selectedStageIdx = 0;
   private currentMech: MechDef = MECHS[0];
+  private currentStage: StageDef = STAGES[0];
+  private isDailyRun = false;
+  private dailyModTitle = '';
 
   // Dual-clock, Witch-Time, Rotational Trauma2 + FOV & Dutch-Roll Springs
   private timeScale = 1.0;
@@ -176,7 +197,7 @@ class NeonOverdriveGame {
   private rollSpring = 0;
   private rollVel = 0;
 
-  // Mobile Multi-Touch Virtual Joystick State (input-systems radial deadzone)
+  // Mobile Multi-Touch Virtual Joystick State
   private touchEnabled = false;
   private joyPointerId: number | null = null;
   private joyOriginX = 0;
@@ -184,7 +205,7 @@ class NeonOverdriveGame {
   private touchMoveX = 0;
   private touchMoveZ = 0;
 
-  // Player Mech Rig + World-Aligned Diegetic 3D Arc Gauges (P0.1)
+  // Player Mech Rig + World-Aligned Diegetic 3D Arc Gauges
   private playerGroup = new THREE.Group();
   private diegeticGroup = new THREE.Group();
   private hpArcSegs: THREE.Mesh[] = [];
@@ -201,7 +222,7 @@ class NeonOverdriveGame {
   private isMovingAnim = false;
   private noseIndicator!: THREE.Mesh;
 
-  // Smooth Kinetic Dash + 0.18s Input Buffer + Frenzy & Revive States
+  // Player Combat, Dash & Overdrive Ultimate Skill
   private px = 0;
   private pz = 0;
   private pvx = 0;
@@ -220,11 +241,13 @@ class NeonOverdriveGame {
   private dashBoostMagTimer = 0;
   private frenzyTimer = 0;
   private revivesLeft = 0;
+  private overdriveCharge = 50; // 0..100, starts at 50% so players unlock first Ultimate fast!
 
-  // Run, Zero-Timer Combo Streak & RPG progression
+  // Run, Combo, Bonus Cores & RPG progression
   private runTime = 0;
   private kills = 0;
   private bossesDefeated = 0;
+  private bonusCoresEarned = 0;
   private comboCount = 0;
   private comboTimer = 0;
   private comboPopTimer = 0;
@@ -259,7 +282,7 @@ class NeonOverdriveGame {
   private gravityWells: GravityWellSlot[] = [];
   private orbitalStrikes: OrbitalStrikeSlot[] = [];
 
-  // Projectiles SoA + InstancedMesh
+  // Player Projectiles + Enemy Sniper Plasma Bolts
   private projMesh!: THREE.InstancedMesh;
   private projActive = new Uint8Array(MAX_PROJ);
   private projX = new Float32Array(MAX_PROJ);
@@ -273,7 +296,17 @@ class NeonOverdriveGame {
   private projLastHit = new Int32Array(MAX_PROJ);
   private projCursor = 0;
 
-  // Enemies SoA + Spatial Hash Grid
+  private eProjMesh!: THREE.InstancedMesh;
+  private epActive = new Uint8Array(MAX_EPROJ);
+  private epX = new Float32Array(MAX_EPROJ);
+  private epZ = new Float32Array(MAX_EPROJ);
+  private epVx = new Float32Array(MAX_EPROJ);
+  private epVz = new Float32Array(MAX_EPROJ);
+  private epLife = new Float32Array(MAX_EPROJ);
+  private epDmg = new Float32Array(MAX_EPROJ);
+  private epCursor = 0;
+
+  // 5 Enemy Types SoA (0=Crawler, 1=Kamikaze, 2=ShieldMech, 3=Juggernaut, 4=SniperDrone)
   private enemyMeshes: THREE.InstancedMesh[] = [];
   private eActive = new Uint8Array(MAX_ENEMIES);
   private eType = new Uint8Array(MAX_ENEMIES);
@@ -288,22 +321,41 @@ class NeonOverdriveGame {
   private eKx = new Float32Array(MAX_ENEMIES);
   private eKz = new Float32Array(MAX_ENEMIES);
   private eFuse = new Float32Array(MAX_ENEMIES);
+  private eChill = new Float32Array(MAX_ENEMIES);
+  private eShootTimer = new Float32Array(MAX_ENEMIES);
   private activeEnemyCount = 0;
 
   private gridHead = new Int32Array(GRID_TOTAL);
   private gridNext = new Int32Array(MAX_ENEMIES);
   private gridOriginX = 0;
   private gridOriginZ = 0;
-  private typeSlotCounts = [0, 0, 0, 0];
+  private typeSlotCounts = [0, 0, 0, 0, 0];
 
-  // Infinite Chunked 3D Cyber-City Map Props
+  // Infinite Chunked 3D Map Props + Biome Landmark Geometries + Stage Hazards + Hack Beacon
   private propMeshes: THREE.InstancedMesh[] = [];
+  private landmarkGeos: Partial<Record<'ruins' | 'foundry' | 'cryo', THREE.BufferGeometry>> = {};
   private activeMapProps: ActiveMapProp[] = [];
   private destroyedBarrels = new Set<string>();
   private lastChunkX = 999999;
   private lastChunkZ = 999999;
 
-  // Boss 3-Attack Red-Telegraph State Machine (P1.1)
+  private stageHazards: StageHazardSlot[] = [];
+  private stageHazardTimer = 4.5;
+
+  private beaconActive = false;
+  private beaconKind: 'supply' | 'altar' = 'supply';
+  private beaconX = 0;
+  private beaconZ = 0;
+  private beaconProgress = 0; // 0..1
+  private beaconPingTimer = 0;
+  private beaconSpawnTimer = 18;
+  private beaconGroup = new THREE.Group();
+  private beaconTowerMesh!: THREE.Mesh;
+  private beaconZoneRing!: THREE.Mesh;
+  private beaconFillDisk!: THREE.Mesh;
+  private beaconBeamMesh!: THREE.Mesh;
+
+  // Boss 3-Attack State Machine
   private spawnAccum = 0;
   private triggeredEvents = new Set<string>();
   private bossActive = false;
@@ -332,7 +384,7 @@ class NeonOverdriveGame {
   private arenaRing!: THREE.Mesh;
   private arenaCenter = new THREE.Vector2();
 
-  // XP Gems + Orbital Drop Pods + Power-Up Drops (P0.3)
+  // XP Gems + Orbital Drop Pods + Power-Up Drops
   private gemMesh!: THREE.InstancedMesh;
   private gActive = new Uint8Array(MAX_GEMS);
   private gX = new Float32Array(MAX_GEMS);
@@ -350,10 +402,11 @@ class NeonOverdriveGame {
   private magnetGeo: THREE.BufferGeometry | null = null;
   private frenzyGeo: THREE.BufferGeometry | null = null;
 
-  private floorMesh!: THREE.Mesh;
+  private hemiLight!: THREE.HemisphereLight;
   private sunLight!: THREE.DirectionalLight;
+  private floorMesh!: THREE.Mesh;
+  private floorMat!: THREE.MeshStandardMaterial;
 
-  // Cached HUD & Offscreen Indicator DOM elements
   private offscreenEls: { root: HTMLDivElement; arrow: HTMLSpanElement; label: HTMLSpanElement }[] =
     [];
   private comboPillEl!: HTMLElement;
@@ -404,7 +457,7 @@ class NeonOverdriveGame {
       this.baseFov,
       window.innerWidth / window.innerHeight,
       0.5,
-      120
+      125
     );
     this.camera.position.set(0, 19.5, 14.8);
     this.camera.lookAt(0, 0.8, 0);
@@ -425,12 +478,15 @@ class NeonOverdriveGame {
     this.setupWeaponMeshes();
     this.setupInstancedPoolsFallback();
     this.setupMapPropPoolsFallback();
+    this.setupStageHazardsAndHackBeacon();
     this.setupBossChestsAndPowerups();
     this.setupOffscreenIndicators();
     this.vfx = new VfxSystem(this.scene);
 
     this.bindEvents();
     this.syncAudioUiControls();
+    this.applyStageEnvironment();
+    this.renderStageSelector();
     this.renderTitleCards();
     this.renderHangarPanel();
     this.renderRecipeBook();
@@ -445,13 +501,22 @@ class NeonOverdriveGame {
 
   private async loadAllModels(): Promise<void> {
     try {
-      const [robotGltf, armoryGltf, enemyGltf, bossGltf, mapGltf, wpnLootGltf] = await Promise.all([
+      const [
+        robotGltf,
+        armoryGltf,
+        enemyGltf,
+        bossGltf,
+        mapGltf,
+        wpnLootGltf,
+        stageLandmarksGltf,
+      ] = await Promise.all([
         this.gltfLoader.loadAsync('./models/RobotExpressive.glb'),
         this.gltfLoader.loadAsync('./models/mech_armory.glb'),
         this.gltfLoader.loadAsync('./models/enemy_mechs.glb'),
         this.gltfLoader.loadAsync('./models/boss_titan.glb'),
         this.gltfLoader.loadAsync('./models/map_props.glb'),
         this.gltfLoader.loadAsync('./models/weapons_and_loot.glb'),
+        this.gltfLoader.loadAsync('./models/stage_landmarks.glb'),
       ]);
 
       const robotRoot = robotGltf.scene;
@@ -547,26 +612,18 @@ class NeonOverdriveGame {
       }
       this.applySelectedMechVisuals();
 
-      const enemyNames = [
-        'Enemy_Crawler',
-        'Enemy_Kamikaze',
-        'Enemy_ShieldMech',
-        'Enemy_Juggernaut',
-      ];
-      enemyNames.forEach((name, tIdx) => {
-        const obj = enemyGltf.scene.getObjectByName(name) as THREE.Mesh | undefined;
-        if (!obj || !obj.geometry) return;
+      // Replace Enemy Pools 0..3 + Type 4 Sniper Drone
+      const replaceEnemyPool = (tIdx: number, geo: THREE.BufferGeometry) => {
         const oldIm = this.enemyMeshes[tIdx];
         this.scene.remove(oldIm);
         oldIm.geometry.dispose();
-
         const vcolMat = new THREE.MeshStandardMaterial({
           color: 0xffffff,
           vertexColors: true,
           roughness: 0.34,
           metalness: 0.68,
         });
-        const newIm = new THREE.InstancedMesh(obj.geometry.clone(), vcolMat, MAX_ENEMIES);
+        const newIm = new THREE.InstancedMesh(geo.clone(), vcolMat, MAX_ENEMIES);
         newIm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         newIm.castShadow = true;
         newIm.receiveShadow = true;
@@ -578,7 +635,25 @@ class NeonOverdriveGame {
         }
         this.scene.add(newIm);
         this.enemyMeshes[tIdx] = newIm;
+      };
+
+      const enemyNames = [
+        'Enemy_Crawler',
+        'Enemy_Kamikaze',
+        'Enemy_ShieldMech',
+        'Enemy_Juggernaut',
+      ];
+      enemyNames.forEach((name, tIdx) => {
+        const obj = enemyGltf.scene.getObjectByName(name) as THREE.Mesh | undefined;
+        if (obj?.geometry) replaceEnemyPool(tIdx, obj.geometry);
       });
+
+      const sniperObj = stageLandmarksGltf.scene.getObjectByName('Enemy_SniperDrone') as
+        | THREE.Mesh
+        | undefined;
+      if (sniperObj?.geometry) {
+        replaceEnemyPool(4, sniperObj.geometry);
+      }
 
       this.bossGroup.clear();
       const bossRoot = bossGltf.scene;
@@ -596,6 +671,18 @@ class NeonOverdriveGame {
       this.bossRightArmNode = bossRoot.getObjectByName('Boss_RightArm') || null;
       this.bossWingsNode = bossRoot.getObjectByName('Boss_Wings') || null;
       this.bossGroup.add(bossRoot);
+
+      // Map Props + Biome-Specific Landmark Geometries (Pylon / FoundryCore / CryoObelisk)
+      const pylonObj = mapGltf.scene.getObjectByName('Prop_HoloPylon') as THREE.Mesh | undefined;
+      const foundryObj = stageLandmarksGltf.scene.getObjectByName('Prop_FoundryCore') as
+        | THREE.Mesh
+        | undefined;
+      const cryoObj = stageLandmarksGltf.scene.getObjectByName('Prop_CryoObelisk') as
+        | THREE.Mesh
+        | undefined;
+      if (pylonObj?.geometry) this.landmarkGeos.ruins = pylonObj.geometry.clone();
+      if (foundryObj?.geometry) this.landmarkGeos.foundry = foundryObj.geometry.clone();
+      if (cryoObj?.geometry) this.landmarkGeos.cryo = cryoObj.geometry.clone();
 
       const propNames = ['Prop_HoloPylon', 'Prop_CargoCrate', 'Prop_PlasmaBarrel'];
       propNames.forEach((pName, pIdx) => {
@@ -619,6 +706,22 @@ class NeonOverdriveGame {
         this.scene.add(newIm);
         this.propMeshes[pIdx] = newIm;
       });
+
+      const beaconObj = stageLandmarksGltf.scene.getObjectByName('Prop_HackBeacon') as
+        | THREE.Mesh
+        | undefined;
+      if (beaconObj?.geometry) {
+        this.beaconTowerMesh.geometry.dispose();
+        this.beaconTowerMesh.geometry = beaconObj.geometry.clone();
+        this.beaconTowerMesh.material = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          vertexColors: true,
+          roughness: 0.28,
+          metalness: 0.75,
+        });
+      }
+
+      this.applyStageEnvironment();
       this.refreshMapChunks(true);
 
       const kunaiObj = wpnLootGltf.scene.getObjectByName('Weapon_Kunai') as THREE.Mesh | undefined;
@@ -691,7 +794,6 @@ class NeonOverdriveGame {
         }
       }
 
-      // 3D Power-Up Meshes: Loot_MagnetCore & Loot_FrenzyOrb (P0.3)
       const magObj = wpnLootGltf.scene.getObjectByName('Loot_MagnetCore') as THREE.Mesh | undefined;
       const frzObj = wpnLootGltf.scene.getObjectByName('Loot_FrenzyOrb') as THREE.Mesh | undefined;
       if (magObj?.geometry) this.magnetGeo = magObj.geometry.clone();
@@ -727,6 +829,28 @@ class NeonOverdriveGame {
     }
   }
 
+  // Live 3D Biome Palette, Lighting & Landmark Geometry Switcher!
+  private applyStageEnvironment(): void {
+    const stg = STAGES[this.selectedStageIdx];
+    this.currentStage = stg;
+    this.audio.setStageTheme(stg.id);
+
+    (this.scene.background as THREE.Color).setHex(stg.bgHex);
+    (this.scene.fog as THREE.FogExp2).color.setHex(stg.fogHex);
+    this.floorMat.color.setHex(stg.floorTintHex);
+    this.floorMat.emissive.setHex(stg.floorEmissiveHex);
+    this.floorMat.emissiveIntensity = stg.id === 'foundry' ? 1.15 : stg.id === 'cryo' ? 1.05 : 0.85;
+    this.hemiLight.color.setHex(stg.hemiSkyHex);
+    this.hemiLight.groundColor.setHex(stg.hemiGroundHex);
+    this.sunLight.color.setHex(stg.sunHex);
+
+    const targetGeo = this.landmarkGeos[stg.id];
+    if (targetGeo && this.propMeshes[0] && this.propMeshes[0].geometry !== targetGeo) {
+      this.propMeshes[0].geometry = targetGeo;
+    }
+    this.refreshMapChunks(true);
+  }
+
   private transitionLocomotion(moving: boolean): void {
     if (!this.mixer) return;
     if (moving === this.isMovingAnim) return;
@@ -743,8 +867,8 @@ class NeonOverdriveGame {
   }
 
   private setupLightingAndPbrFloor(): void {
-    const hemi = new THREE.HemisphereLight(0x7dd3fc, 0x1e1b4b, 1.55);
-    this.scene.add(hemi);
+    this.hemiLight = new THREE.HemisphereLight(0x7dd3fc, 0x1e1b4b, 1.55);
+    this.scene.add(this.hemiLight);
 
     this.sunLight = new THREE.DirectionalLight(0xffffff, 2.85);
     this.sunLight.position.set(10, 22, 12);
@@ -774,17 +898,17 @@ class NeonOverdriveGame {
 
     const floorGeo = new THREE.PlaneGeometry(144, 144);
     floorGeo.rotateX(-Math.PI / 2);
-    const floorMat = new THREE.MeshStandardMaterial({
+    this.floorMat = new THREE.MeshStandardMaterial({
       map: albedo,
       normalMap: normal,
       normalScale: new THREE.Vector2(0.95, 0.95),
-      emissive: new THREE.Color(0xffffff),
+      emissive: new THREE.Color(0x38bdf8),
       emissiveMap: emissive,
       emissiveIntensity: 0.85,
       roughness: 0.58,
       metalness: 0.52,
     });
-    this.floorMesh = new THREE.Mesh(floorGeo, floorMat);
+    this.floorMesh = new THREE.Mesh(floorGeo, this.floorMat);
     this.floorMesh.receiveShadow = true;
     this.scene.add(this.floorMesh);
   }
@@ -804,6 +928,113 @@ class NeonOverdriveGame {
     }
   }
 
+  private setupStageHazardsAndHackBeacon(): void {
+    // Stage Hazard Pool (Magma Thermal Vents & Cryo Superconductor Pulses)
+    const rimGeo = new THREE.RingGeometry(0.88, 1.0, 32);
+    rimGeo.rotateX(-Math.PI / 2);
+    const fillGeo = new THREE.CircleGeometry(0.92, 32);
+    fillGeo.rotateX(-Math.PI / 2);
+    for (let i = 0; i < MAX_STAGE_HAZARDS; i++) {
+      const grp = new THREE.Group();
+      const rim = new THREE.Mesh(
+        rimGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0xff6b00,
+          transparent: true,
+          opacity: 0.9,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        })
+      );
+      rim.position.y = 0.07;
+      const fill = new THREE.Mesh(
+        fillGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0xff4500,
+          transparent: true,
+          opacity: 0.3,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        })
+      );
+      fill.position.y = 0.065;
+      grp.add(rim, fill);
+      grp.visible = false;
+      this.scene.add(grp);
+      this.stageHazards.push({
+        active: false,
+        cryo: false,
+        x: 0,
+        z: 0,
+        radius: 3.4,
+        age: 0,
+        dur: 1.2,
+        group: grp,
+        rim,
+        fill,
+      });
+    }
+
+    // Tactical Hack Beacon / Blood Challenge Altar 3D Objective
+    this.beaconTowerMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.45, 0.65, 2.4, 8),
+      new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x0891b2 })
+    );
+    const zRingGeo = new THREE.RingGeometry(4.35, 4.6, 40);
+    zRingGeo.rotateX(-Math.PI / 2);
+    this.beaconZoneRing = new THREE.Mesh(
+      zRingGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x34d399,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    this.beaconZoneRing.position.y = 0.065;
+
+    const zFillGeo = new THREE.CircleGeometry(4.5, 40);
+    zFillGeo.rotateX(-Math.PI / 2);
+    this.beaconFillDisk = new THREE.Mesh(
+      zFillGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x34d399,
+        transparent: true,
+        opacity: 0.25,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    this.beaconFillDisk.position.y = 0.06;
+
+    this.beaconBeamMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.45, 16, 12, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x34d399,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    this.beaconBeamMesh.position.y = 8;
+
+    this.beaconGroup.add(
+      this.beaconTowerMesh,
+      this.beaconZoneRing,
+      this.beaconFillDisk,
+      this.beaconBeamMesh
+    );
+    this.beaconGroup.visible = false;
+    this.scene.add(this.beaconGroup);
+  }
+
   private hash2D(cx: number, cz: number, salt: number): number {
     let n = Math.imul(cx, 374761393) + Math.imul(cz, 668265263) + Math.imul(salt, 1442695041);
     n = (n ^ (n >>> 13)) * 1274126177;
@@ -819,6 +1050,7 @@ class NeonOverdriveGame {
 
     this.activeMapProps = [];
     const counts = [0, 0, 0];
+    const stgSalt = this.selectedStageIdx * 97;
 
     for (let dz = -2; dz <= 2; dz++) {
       for (let dx = -2; dx <= 2; dx++) {
@@ -828,25 +1060,25 @@ class NeonOverdriveGame {
         const baseZ = cz * MAP_CHUNK;
 
         for (let slot = 0; slot < 2; slot++) {
-          const rKind = this.hash2D(cx, cz, slot * 7 + 1);
-          if (rKind < 0.28) continue;
-          const ox = (this.hash2D(cx, cz, slot * 7 + 2) - 0.5) * (MAP_CHUNK - 5);
-          const oz = (this.hash2D(cx, cz, slot * 7 + 3) - 0.5) * (MAP_CHUNK - 5);
+          const rKind = this.hash2D(cx, cz, slot * 7 + 1 + stgSalt);
+          if (rKind < 0.25) continue;
+          const ox = (this.hash2D(cx, cz, slot * 7 + 2 + stgSalt) - 0.5) * (MAP_CHUNK - 5);
+          const oz = (this.hash2D(cx, cz, slot * 7 + 3 + stgSalt) - 0.5) * (MAP_CHUNK - 5);
           const wx = baseX + MAP_CHUNK * 0.5 + ox;
           const wz = baseZ + MAP_CHUNK * 0.5 + oz;
           if (wx * wx + wz * wz < 8.5 * 8.5) continue;
 
           const key = `${cx}_${cz}_${slot}`;
           let kind: 0 | 1 | 2 = 2;
-          if (rKind > 0.76) kind = 0;
-          else if (rKind > 0.52) kind = 1;
+          if (rKind > 0.7) kind = 0;
+          else if (rKind > 0.48) kind = 1;
           else kind = 2;
 
           if (kind === 2 && this.destroyedBarrels.has(key)) continue;
           if (counts[kind] >= MAX_MAP_PROPS) continue;
 
-          const rotY = Math.floor(this.hash2D(cx, cz, slot * 7 + 4) * 4) * (Math.PI / 2);
-          const radius = kind === 0 ? 1.0 : kind === 1 ? 1.25 : 0.62;
+          const rotY = Math.floor(this.hash2D(cx, cz, slot * 7 + 4 + stgSalt) * 4) * (Math.PI / 2);
+          const radius = kind === 0 ? 1.05 : kind === 1 ? 1.25 : 0.62;
           this.activeMapProps.push({ key, kind, x: wx, z: wz, rotY, radius });
 
           const idx = counts[kind]++;
@@ -881,17 +1113,24 @@ class NeonOverdriveGame {
         this.addTrauma(0.36);
         this.punchCamera(-125, 0.045);
         this.spawnGem(p.x, p.z, 10);
-        // P0.3: 32% chance for explosive barrel to drop Fullscreen Magnet or Frenzy Orb!
-        if (Math.random() < 0.32) {
+        if (Math.random() < 0.34) {
           this.spawnPowerUp(p.x, p.z, Math.random() < 0.55 ? 'magnet' : 'frenzy');
         }
-        this.damageCircle(p.x, p.z, 4.6, 135 * this.getDamageMult(), 15, 0xff7b00, undefined, false);
+        this.damageCircle(
+          p.x,
+          p.z,
+          4.6,
+          135 * this.getDamageMult(),
+          15,
+          0xff7b00,
+          undefined,
+          false
+        );
       }
     }
     if (anyBroken) this.refreshMapChunks(true);
   }
 
-  // World-aligned Diegetic 3D HP (Left) & Dash (Right) Arc Gauges (P0.1)
   private setupPlayerAndDiegeticGauges(): void {
     const baseRingGeo = new THREE.RingGeometry(0.84, 0.96, 28);
     baseRingGeo.rotateX(-Math.PI / 2);
@@ -918,7 +1157,6 @@ class NeonOverdriveGame {
     this.playerGroup.add(this.noseIndicator);
     this.scene.add(this.playerGroup);
 
-    // Subtle dark backing arcs + segmented neon HP (left) and Dash (right) gauges
     const bgArcGeo = new THREE.RingGeometry(1.18, 1.34, 36);
     bgArcGeo.rotateX(-Math.PI / 2);
     const bgArc = new THREE.Mesh(
@@ -933,7 +1171,6 @@ class NeonOverdriveGame {
     bgArc.position.y = 0.05;
     this.diegeticGroup.add(bgArc);
 
-    // Left semicircle (angles PI*0.58 .. PI*1.42 in XZ plane) -> 10 HP segments
     const hpTotalSpan = Math.PI * 0.82;
     const hpStart = Math.PI * 0.59;
     const hpSegCount = 10;
@@ -957,7 +1194,6 @@ class NeonOverdriveGame {
       this.hpArcSegs.push(seg);
     }
 
-    // Right semicircle (angles -PI*0.41 .. +PI*0.41) -> 8 Dash segments
     const dashTotalSpan = Math.PI * 0.82;
     const dashStart = -Math.PI * 0.41;
     const dashSegCount = 8;
@@ -981,7 +1217,6 @@ class NeonOverdriveGame {
       this.dashArcSegs.push(seg);
     }
 
-    // Golden Frenzy Aura Halo
     const frenzyGeo = new THREE.RingGeometry(1.48, 1.72, 36);
     frenzyGeo.rotateX(-Math.PI / 2);
     this.frenzyHaloMesh = new THREE.Mesh(
@@ -1027,10 +1262,15 @@ class NeonOverdriveGame {
       }
     }
 
-    if (this.frenzyTimer > 0) {
+    if (this.frenzyTimer > 0 || this.overdriveCharge >= 100) {
       this.frenzyHaloMesh.visible = true;
-      const pulse = 1 + Math.sin(this.runTime * 18) * 0.12;
+      const pulse = 1 + Math.sin(this.runTime * 16) * 0.1;
       this.frenzyHaloMesh.scale.setScalar(pulse);
+      (this.frenzyHaloMesh.material as THREE.MeshBasicMaterial).color.setHex(
+        this.frenzyTimer > 0 ? 0xf97316 : 0xfde047
+      );
+      (this.frenzyHaloMesh.material as THREE.MeshBasicMaterial).opacity =
+        this.frenzyTimer > 0 ? 0.88 : 0.48;
     } else {
       this.frenzyHaloMesh.visible = false;
     }
@@ -1061,7 +1301,12 @@ class NeonOverdriveGame {
     const h = window.innerHeight;
     let slotIdx = 0;
 
-    const pushTarget = (tx: number, tz: number, cls: 'boss' | 'pod' | 'powerup', text: string) => {
+    const pushTarget = (
+      tx: number,
+      tz: number,
+      cls: 'boss' | 'pod' | 'powerup' | 'beacon',
+      text: string
+    ) => {
       if (slotIdx >= MAX_OFFSCREEN_INDICATORS) return;
       this.tmpProj.set(tx, 1.0, tz).project(this.camera);
       let nx = this.tmpProj.x;
@@ -1070,7 +1315,6 @@ class NeonOverdriveGame {
         nx = -nx;
         ny = -ny;
       }
-      // Only show edge arrow when target is near or outside screen border
       if (Math.abs(nx) < 0.88 && Math.abs(ny) < 0.84) return;
 
       const angle = Math.atan2(-ny, nx);
@@ -1099,12 +1343,20 @@ class NeonOverdriveGame {
     if (this.bossActive) {
       pushTarget(this.bossX, this.bossZ, 'boss', '⚠ 泰坦');
     }
+    if (this.beaconActive) {
+      pushTarget(
+        this.beaconX,
+        this.beaconZ,
+        'beacon',
+        this.beaconKind === 'supply' ? '📡 骇入塔' : '🩸 挑战塔'
+      );
+    }
     for (const ch of this.chests) {
       if (ch.active) pushTarget(ch.x, ch.z, 'pod', '📦 空投舱');
     }
     for (const pu of this.powerups) {
       if (pu.active) {
-        pushTarget(pu.x, pu.z, 'powerup', pu.kind === 'magnet' ? '🧲 全屏磁铁' : '🔥 狂暴球');
+        pushTarget(pu.x, pu.z, 'powerup', pu.kind === 'magnet' ? '🧲 磁铁' : '🔥 狂暴球');
       }
     }
 
@@ -1153,7 +1405,6 @@ class NeonOverdriveGame {
       this.laserBeams.push(beam);
     }
 
-    // Weapon 5 Pool: Gravity Wells / Singularity Collapse (P0.2)
     const coreGeo = new THREE.SphereGeometry(0.52, 16, 12);
     const accGeoA = new THREE.RingGeometry(0.65, 1.0, 28);
     accGeoA.rotateX(-Math.PI / 2);
@@ -1207,7 +1458,6 @@ class NeonOverdriveGame {
       });
     }
 
-    // Weapon 6 Pool: Orbital Strike Lock-On Reticles (P0.2)
     const outerRetGeo = new THREE.RingGeometry(0.9, 1.0, 32);
     outerRetGeo.rotateX(-Math.PI / 2);
     const innerRetGeo = new THREE.CircleGeometry(0.95, 28);
@@ -1274,8 +1524,22 @@ class NeonOverdriveGame {
     }
     this.scene.add(this.projMesh);
 
+    // Enemy Sniper Plasma Bolts Pool (Crimson-Gold Energy Spheres)
+    const epGeo = new THREE.OctahedronGeometry(0.32, 1);
+    this.eProjMesh = new THREE.InstancedMesh(
+      epGeo,
+      new THREE.MeshBasicMaterial({ color: 0xff2a55 }),
+      MAX_EPROJ
+    );
+    this.eProjMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.eProjMesh.frustumCulled = false;
+    for (let i = 0; i < MAX_EPROJ; i++) {
+      this.hideInstance(this.eProjMesh, i);
+    }
+    this.scene.add(this.eProjMesh);
+
     const fallbackGeo = new THREE.BoxGeometry(0.6, 0.9, 0.6);
-    for (let t = 0; t < 4; t++) {
+    for (let t = 0; t < 5; t++) {
       const im = new THREE.InstancedMesh(
         fallbackGeo,
         new THREE.MeshStandardMaterial({ color: 0x8855ff }),
@@ -1322,7 +1586,6 @@ class NeonOverdriveGame {
     this.arenaRing.visible = false;
     this.scene.add(this.arenaRing);
 
-    // Boss Telegraph 1: Crimson Dash Red-Carpet Corridor (width 3.2, length 1, anchored at origin -Z)
     const carpetGeo = new THREE.PlaneGeometry(3.2, 1.0);
     carpetGeo.rotateX(-Math.PI / 2);
     carpetGeo.translate(0, 0, -0.5);
@@ -1341,7 +1604,6 @@ class NeonOverdriveGame {
     this.bossChargeCarpet.visible = false;
     this.scene.add(this.bossChargeCarpet);
 
-    // Boss Telegraph 2: 4-Way Rotating Crimson Cross-Lasers
     const bLaserGeo = new THREE.PlaneGeometry(1, 1);
     bLaserGeo.rotateX(-Math.PI / 2);
     bLaserGeo.rotateY(Math.PI / 2);
@@ -1364,7 +1626,6 @@ class NeonOverdriveGame {
       this.bossCrossLasers.push(bm);
     }
 
-    // Boss Telegraph 3: Multi-Circle Ground Red Barrage Zones
     const mRimGeo = new THREE.RingGeometry(0.88, 1.0, 28);
     mRimGeo.rotateX(-Math.PI / 2);
     const mFillGeo = new THREE.CircleGeometry(0.92, 28);
@@ -1410,7 +1671,6 @@ class NeonOverdriveGame {
       });
     }
 
-    // 6 Orbital Hyper Supply Pods
     for (let i = 0; i < 6; i++) {
       const grp = new THREE.Group();
       const box = new THREE.Mesh(
@@ -1442,7 +1702,6 @@ class NeonOverdriveGame {
       this.chests.push({ active: false, x: 0, z: 0, age: 0, group: grp });
     }
 
-    // Power-Up Drops Pool (Loot_MagnetCore & Loot_FrenzyOrb)
     const fallbackPuGeo = new THREE.OctahedronGeometry(0.42, 1);
     const puRingGeo = new THREE.RingGeometry(0.65, 0.82, 24);
     puRingGeo.rotateX(-Math.PI / 2);
@@ -1481,12 +1740,13 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Stat Modifier Stack (Includes Meta-Hangar Permanent Upgrades + Frenzy!)
+  // Stat Modifier Stack
   // =========================================================================
   private getDamageMult(): number {
     const capLv = this.passiveLevels.capacitor || 0;
     const hangarDmg = (this.metaSave.upgrades.overcharge || 0) * 0.06;
-    let pct = capLv * 0.14 + this.overclockStacks * 0.05 + hangarDmg;
+    const dailyDmg = this.isDailyRun && this.dailyModTitle === '重装机神压境' ? 0.22 : 0;
+    let pct = capLv * 0.14 + this.overclockStacks * 0.05 + hangarDmg + dailyDmg;
     if (this.currentMech.id === 'aegis') {
       const missingTenPct = Math.floor(((1 - this.hp / Math.max(1, this.maxHp)) * 100) / 10);
       pct += Math.max(0, missingTenPct) * 0.06;
@@ -1510,7 +1770,8 @@ class NeonOverdriveGame {
   }
 
   private getExtraProj(): number {
-    return this.currentMech.extraProj + (this.passiveLevels.splitter || 0);
+    const dailyProj = this.isDailyRun && this.dailyModTitle === '狙击矩阵超频' ? 1 : 0;
+    return this.currentMech.extraProj + (this.passiveLevels.splitter || 0) + dailyProj;
   }
 
   private getMagnetRadius(): number {
@@ -1523,7 +1784,7 @@ class NeonOverdriveGame {
   private getMoveSpeed(): number {
     const magLv = this.passiveLevels.magnet || 0;
     const hangarSpd = (this.metaSave.upgrades.thrusters || 0) * 0.04;
-    const frenzySpd = this.frenzyTimer > 0 ? 0.2 : 0;
+    const frenzySpd = this.frenzyTimer > 0 ? 0.22 : 0;
     return this.currentMech.speed * (1 + magLv * 0.04 + hangarSpd + frenzySpd);
   }
 
@@ -1537,11 +1798,12 @@ class NeonOverdriveGame {
   }
 
   private getCritChance(): number {
-    return 0.06 + this.currentMech.critBonus + (this.frenzyTimer > 0 ? 0.12 : 0);
+    const dailyCrit = this.isDailyRun && this.dailyModTitle === '超导暴击狂潮' ? 0.2 : 0;
+    return 0.06 + this.currentMech.critBonus + dailyCrit + (this.frenzyTimer > 0 ? 0.12 : 0);
   }
 
   // =========================================================================
-  // Camera Feel: Rotational Trauma2 + FOV Zoom-Punch + Dutch Roll
+  // Camera Feel & Overdrive Ultimate Skill (`[Q]` / `#btn-touch-ult`)
   // =========================================================================
   private triggerHitstop(duration: number, slow = 0.04): void {
     if (duration > this.hitstopTimer) {
@@ -1564,15 +1826,98 @@ class NeonOverdriveGame {
     this.recoilVel += impulse;
   }
 
+  private addOverdriveCharge(amount: number): void {
+    this.overdriveCharge = Math.min(100, this.overdriveCharge + amount);
+  }
+
+  public triggerOverdriveUltimate(): void {
+    if (this.screen !== 'playing' || this.overdriveCharge < 100) return;
+    this.overdriveCharge = 0;
+    this.iFrameTimer = Math.max(this.iFrameTimer, 2.2);
+    this.audio.playOverdriveUltimate();
+    this.triggerHitstop(0.085, 0.04);
+    this.addTrauma(0.72);
+    this.punchCamera(-155, 0.065);
+    if (typeof navigator.vibrate === 'function') navigator.vibrate([25, 30, 55]);
+
+    const dmgMult = this.getDamageMult();
+    const id = this.currentMech.id;
+
+    if (id === 'striker') {
+      // 次元千本樱: 16 radial high-pierce plasma kunai + 8 crescent waves + 2.4s speed frenzy!
+      this.frenzyTimer = Math.max(this.frenzyTimer, 2.6);
+      this.vfx.spawnRing(this.px, this.pz, 14, 0x22d3ee, 0.55);
+      for (let k = 0; k < 16; k++) {
+        const ang = (k / 16) * Math.PI * 2;
+        this.spawnProjectile(
+          this.px,
+          this.pz,
+          Math.sin(ang) * 32,
+          -Math.cos(ang) * 32,
+          62 * dmgMult,
+          6,
+          true,
+          0xfde047
+        );
+        if (k % 2 === 0) {
+          this.vfx.spawnSlashWave(this.px, this.pz, ang, 0x67e8f9);
+        }
+      }
+      this.damageCircle(this.px, this.pz, 8.5, 145 * dmgMult, 16, 0x22d3ee, 'kunai');
+      this.showToast('💥 超载必杀【次元千本樱】发动！环形光刃风暴撕裂全场！');
+    } else if (id === 'aegis') {
+      // 地核崩裂炮: Massive molten sky-pillar + 14m nuke + heal 35% Max HP!
+      const healAmt = Math.round(this.maxHp * 0.35);
+      this.hp = Math.min(this.maxHp, this.hp + healAmt);
+      this.vfx.spawnSkyPillar(this.px, this.pz, 3.8, 0xfbbf24, 0.55);
+      this.vfx.spawnRing(this.px, this.pz, 15, 0xf43f5e, 0.62);
+      this.vfx.spawnBurst(this.px, 0.8, this.pz, 0xfbbf24, 38, 15);
+      this.damageCircle(this.px, this.pz, 13.5, 310 * dmgMult, 24, 0xfbbf24, 'saw');
+      this.vfx.spawnDamageNumber(this.px, this.pz, `+${healAmt} HP`, true, '#34d399');
+      this.showToast(`💥 超载必杀【地核崩裂炮】发动！全屏震荡清场并恢复 ${healAmt} HP！`);
+    } else {
+      // 天穹浮游齐射: 12 Orbital Skynet Judgement pillars + Fullscreen Magnet Vacuum!
+      for (let s = 0; s < 12; s++) {
+        const target = this.pickEnemyClusterTarget(20);
+        this.queueOrbitalStrike(
+          target.x + (Math.random() - 0.5) * 2.2,
+          target.z + (Math.random() - 0.5) * 2.2,
+          4.2,
+          s * 0.06,
+          0.24,
+          195 * dmgMult,
+          true
+        );
+      }
+      this.activateMagnetVacuum();
+      this.showToast('💥 超载必杀【天穹浮游齐射】发动！12 道审判光柱轰顶 + 全图磁吸！');
+    }
+  }
+
   // =========================================================================
-  // Run Start / Reset
+  // Run Start / Seeded Daily Challenge
   // =========================================================================
-  public startRun(mechIdx = this.selectedMechIdx): void {
+  public startDailyChallenge(): void {
+    const spec = getDailyChallengeSpec();
+    this.isDailyRun = true;
+    this.dailyModTitle = spec.modifierTitle;
+    this.selectedStageIdx = spec.stageIdx;
+    this.selectedMechIdx = spec.mechIdx;
+    this.applyStageEnvironment();
+    this.startRun(this.selectedMechIdx, true);
+  }
+
+  public startRun(mechIdx = this.selectedMechIdx, keepDailyFlag = false): void {
+    if (!keepDailyFlag) {
+      this.isDailyRun = false;
+      this.dailyModTitle = '';
+    }
     this.audio.unlock();
     this.audio.setBulletTimeMuffle(false);
     this.selectedMechIdx = mechIdx;
     this.currentMech = MECHS[mechIdx];
     this.applySelectedMechVisuals();
+    this.applyStageEnvironment();
 
     this.px = 0;
     this.pz = 0;
@@ -1590,10 +1935,12 @@ class NeonOverdriveGame {
     this.dashBoostMagTimer = 0;
     this.frenzyTimer = 0;
     this.revivesLeft = this.metaSave.upgrades.phoenix || 0;
+    this.overdriveCharge = 50;
 
     this.runTime = 0;
     this.kills = 0;
     this.bossesDefeated = 0;
+    this.bonusCoresEarned = 0;
     this.comboCount = 0;
     this.comboTimer = 0;
     this.comboPopTimer = 0;
@@ -1626,6 +1973,15 @@ class NeonOverdriveGame {
       os.active = false;
       os.group.visible = false;
     }
+    for (const sh of this.stageHazards) {
+      sh.active = false;
+      sh.group.visible = false;
+    }
+    this.stageHazardTimer = 4.0;
+    this.beaconActive = false;
+    this.beaconGroup.visible = false;
+    this.beaconSpawnTimer = 18;
+    document.getElementById('beacon-banner')!.classList.add('hidden');
 
     this.camFocus.set(0, 0, 0);
     this.trauma = 0;
@@ -1641,7 +1997,9 @@ class NeonOverdriveGame {
 
     this.eActive.fill(0);
     this.eWobble.fill(0);
+    this.eChill.fill(0);
     this.projActive.fill(0);
+    this.epActive.fill(0);
     this.gActive.fill(0);
     this.activeEnemyCount = 0;
     this.activeGemCount = 0;
@@ -1661,6 +2019,8 @@ class NeonOverdriveGame {
     }
     for (let i = 0; i < MAX_PROJ; i++) this.hideInstance(this.projMesh, i);
     this.projMesh.instanceMatrix.needsUpdate = true;
+    for (let i = 0; i < MAX_EPROJ; i++) this.hideInstance(this.eProjMesh, i);
+    this.eProjMesh.instanceMatrix.needsUpdate = true;
     for (let i = 0; i < MAX_GEMS; i++) this.hideInstance(this.gemMesh, i);
     this.gemMesh.instanceMatrix.needsUpdate = true;
     for (const im of this.enemyMeshes) {
@@ -1670,16 +2030,21 @@ class NeonOverdriveGame {
 
     this.diegeticGroup.visible = true;
     this.updateDiegeticGauges();
-    this.spawnRingWave(16, 0, 19);
-    this.spawnRingWave(6, 2, 21);
+    this.spawnRingWave(15, 0, 19);
+    this.spawnRingWave(5, 4, 21); // Introduce ranged Sniper Drones right from wave 1!
+    if (this.isDailyRun && this.dailyModTitle === '重装机神压境') {
+      this.spawnEnemy(3, 14, -14, true);
+    }
 
     this.setScreen('playing');
     this.updateSlotBadges();
     this.updateHud();
+
+    const modeTag = this.isDailyRun
+      ? `📅 每日特遣【${this.dailyModTitle}】· `
+      : `🗺️【${this.currentStage.name}】· `;
     this.showToast(
-      this.touchEnabled
-        ? `机甲【${this.currentMech.name}】出击！左指滑动走位 · 右下⚡贴脸闪避触发子弹时间！`
-        : `机甲【${this.currentMech.name}】出击！脚下左绿血槽 · 右青冲刺槽！`
+      `${modeTag}${this.currentMech.name} 出击！攒满能量按 ${this.touchEnabled ? '💥' : '[Q]'} 释放【${this.currentMech.overdriveName}】！`
     );
   }
 
@@ -1708,6 +2073,7 @@ class NeonOverdriveGame {
     }
     if (next === 'title') {
       this.diegeticGroup.visible = false;
+      this.renderStageSelector();
       this.renderHangarPanel();
       this.renderTitleCards();
     }
@@ -1722,7 +2088,7 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Main Loop (Dual-Clock + Adaptive Synthwave BGM Tick)
+  // Main Loop
   // =========================================================================
   private tick(): void {
     this.timer.update();
@@ -1743,12 +2109,11 @@ class NeonOverdriveGame {
       }
     }
 
-    // Drive Beat-Synced Adaptive Synthwave BGM (P2.1)
     const hasHyper = Object.values(this.weaponHyper).some(Boolean);
     const bgmIntensity: 0 | 1 | 2 =
       this.bossActive || this.frenzyTimer > 0 || hasHyper || this.runTime >= 360
         ? 2
-        : this.runTime >= 150 || this.comboCount >= 12
+        : this.runTime >= 120 || this.comboCount >= 12 || this.beaconActive
         ? 1
         : 0;
     const bgmActive =
@@ -1831,7 +2196,9 @@ class NeonOverdriveGame {
     this.refreshMapChunks(false);
     this.stepWaveDirector(dt);
     this.rebuildSpatialGrid();
+    this.stepStageHazardsAndBeacon(dt);
     this.stepEnemies(dt, rawDt);
+    this.stepEnemyProjectiles(dt);
     this.stepBoss(dt, rawDt);
     this.stepWeapons(dt);
     this.stepGravityWells(dt);
@@ -1841,7 +2208,177 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Spatial Hash Neighborhood Query (P2.2: Eliminates O(N) full-array scans!)
+  // Stage Biome Hazards (Magma Vents / Cryo Pulses) & Tactical Hack Beacon!
+  // =========================================================================
+  public spawnHackBeacon(forceNearPlayer = false): void {
+    this.beaconActive = true;
+    this.beaconKind = Math.random() < 0.62 ? 'supply' : 'altar';
+    const ang = forceNearPlayer ? this.facingYaw : Math.random() * Math.PI * 2;
+    const dist = forceNearPlayer ? 6.5 : 15 + Math.random() * 6;
+    this.beaconX = this.px + Math.sin(ang) * dist;
+    this.beaconZ = this.pz - Math.cos(ang) * dist;
+    this.beaconProgress = 0;
+    this.beaconPingTimer = 0;
+
+    const hex = this.beaconKind === 'supply' ? 0x34d399 : 0xf43f5e;
+    (this.beaconZoneRing.material as THREE.MeshBasicMaterial).color.setHex(hex);
+    (this.beaconFillDisk.material as THREE.MeshBasicMaterial).color.setHex(hex);
+    (this.beaconBeamMesh.material as THREE.MeshBasicMaterial).color.setHex(hex);
+    this.beaconFillDisk.scale.setScalar(0.05);
+    this.beaconGroup.position.set(this.beaconX, 0, this.beaconZ);
+    this.beaconGroup.visible = true;
+
+    const banner = document.getElementById('beacon-banner')!;
+    banner.classList.remove('hidden');
+    banner.classList.toggle('altar', this.beaconKind === 'altar');
+
+    this.vfx.spawnRing(this.beaconX, this.beaconZ, 7, hex, 0.5);
+    this.showToast(
+      this.beaconKind === 'supply'
+        ? '📡 战术骇入信标已降落！踏入绿圈驻守 4 秒即可空投超导进化箱！'
+        : '🩸 狂猎挑战祭坛已显现！驻守激活挑战可赢取 +💎30 超导核心！'
+    );
+  }
+
+  private spawnStageHazard(cryo: boolean, x: number, z: number): void {
+    const slot = this.stageHazards.find((s) => !s.active) || this.stageHazards[0];
+    slot.active = true;
+    slot.cryo = cryo;
+    slot.x = x;
+    slot.z = z;
+    slot.radius = cryo ? 5.2 : 3.5;
+    slot.age = 0;
+    slot.dur = cryo ? 1.0 : 1.25;
+    const col = cryo ? 0x67e8f9 : 0xff5500;
+    (slot.rim.material as THREE.MeshBasicMaterial).color.setHex(col);
+    (slot.fill.material as THREE.MeshBasicMaterial).color.setHex(cryo ? 0x38bdf8 : 0xff3b00);
+    slot.group.position.set(x, 0, z);
+    slot.group.scale.setScalar(slot.radius);
+    slot.fill.scale.setScalar(0.12);
+    slot.group.visible = true;
+  }
+
+  private stepStageHazardsAndBeacon(dt: number): void {
+    // 1. Periodic Biome Hazards in Foundry (Magma Vents) & Cryo (Superconductor Freeze Pulse)
+    if (this.currentStage.id !== 'ruins') {
+      this.stageHazardTimer -= dt;
+      if (this.stageHazardTimer <= 0) {
+        const isCryo = this.currentStage.id === 'cryo';
+        this.stageHazardTimer = isCryo ? 7.2 : 6.2;
+        const count = isCryo ? 2 : 3;
+        for (let k = 0; k < count; k++) {
+          const target = this.pickEnemyClusterTarget(16);
+          this.spawnStageHazard(isCryo, target.x, target.z);
+        }
+      }
+    }
+
+    for (const sh of this.stageHazards) {
+      if (!sh.active) continue;
+      sh.age += dt;
+      const p = Math.min(1, sh.age / sh.dur);
+      sh.fill.scale.setScalar(0.12 + p * 0.88);
+      sh.rim.rotation.z += dt * 3.5;
+
+      if (sh.age >= sh.dur) {
+        sh.active = false;
+        sh.group.visible = false;
+        this.audio.playHazardErupt(sh.cryo);
+        if (sh.cryo) {
+          // Cryo Pulse: Freezes/slows enemies by 55% for 4.5s + light cryo damage!
+          this.vfx.spawnRing(sh.x, sh.z, sh.radius * 1.15, 0x67e8f9, 0.48);
+          this.vfx.spawnBurst(sh.x, 0.5, sh.z, 0x67e8f9, 18, 10);
+          const cryoDmg = 45 * this.getWaveScale();
+          this.forEachEnemyInRadius(sh.x, sh.z, sh.radius, (idx) => {
+            this.eChill[idx] = 4.5;
+            this.damageEnemy(idx, cryoDmg, 0, 0, 0x67e8f9);
+          });
+        } else {
+          // Magma Geyser: Massive fire pillar melting enemies (and scorching careless players!)
+          this.vfx.spawnSkyPillar(sh.x, sh.z, sh.radius * 0.58, 0xff5500, 0.45);
+          this.vfx.spawnRing(sh.x, sh.z, sh.radius * 1.2, 0xfbbf24, 0.38);
+          this.vfx.spawnBurst(sh.x, 0.6, sh.z, 0xff6b00, 24, 12);
+          this.addTrauma(0.28);
+          const magmaDmg = 185 * this.getWaveScale();
+          this.damageCircle(sh.x, sh.z, sh.radius, magmaDmg, 14, 0xff5500, undefined, true);
+          if (
+            Math.hypot(this.px - sh.x, this.pz - sh.z) < sh.radius * 0.88 &&
+            this.iFrameTimer <= 0 &&
+            this.dashActiveTimer <= 0
+          ) {
+            this.damagePlayer(18);
+          }
+        }
+      }
+    }
+
+    // 2. Tactical Hack Beacon Spawning & Hold-Zone Capture Loop
+    if (!this.beaconActive) {
+      this.beaconSpawnTimer -= dt;
+      if (this.beaconSpawnTimer <= 0) {
+        this.beaconSpawnTimer = 52;
+        this.spawnHackBeacon(false);
+      }
+    } else {
+      this.beaconTowerMesh.rotation.y += dt * 1.8;
+      const dist = Math.hypot(this.px - this.beaconX, this.pz - this.beaconZ);
+      const inside = dist <= 4.65;
+      if (inside) {
+        const rate = this.beaconKind === 'supply' ? 0.24 : 0.27;
+        this.beaconProgress = Math.min(1, this.beaconProgress + rate * dt);
+        this.beaconPingTimer -= dt;
+        if (this.beaconPingTimer <= 0) {
+          this.beaconPingTimer = 0.42;
+          this.audio.playBeaconTick(this.beaconProgress);
+        }
+      } else {
+        this.beaconProgress = Math.max(0, this.beaconProgress - 0.05 * dt);
+      }
+
+      this.beaconFillDisk.scale.setScalar(0.06 + this.beaconProgress * 0.94);
+      const pct = Math.round(this.beaconProgress * 100);
+      document.getElementById('beacon-title')!.textContent =
+        this.beaconKind === 'supply'
+          ? `📡 战术骇入信标 · ${inside ? '正在骇入' : '进圈充能'} ${pct}%`
+          : `🩸 狂猎挑战祭坛 · ${inside ? '正在献祭' : '进圈激活'} ${pct}%`;
+      document.getElementById('beacon-bar-fill')!.style.width = `${pct}%`;
+
+      if (this.beaconProgress >= 1) {
+        const bx = this.beaconX;
+        const bz = this.beaconZ;
+        const kind = this.beaconKind;
+        this.beaconActive = false;
+        this.beaconGroup.visible = false;
+        document.getElementById('beacon-banner')!.classList.add('hidden');
+
+        this.audio.playFanfare(true);
+        this.addOverdriveCharge(35);
+        this.vfx.spawnSkyPillar(bx, bz, 2.8, kind === 'supply' ? 0x34d399 : 0xfbbf24, 0.5);
+        this.vfx.spawnRing(bx, bz, 13, kind === 'supply' ? 0x34d399 : 0xf43f5e, 0.55);
+        this.damageCircle(bx, bz, 11, 220 * this.getDamageMult(), 18, 0x34d399);
+
+        if (kind === 'supply') {
+          this.spawnChest(bx, bz);
+          for (let g = 0; g < 8; g++) {
+            const a = (g / 8) * Math.PI * 2;
+            this.spawnGem(bx + Math.cos(a) * 2.0, bz + Math.sin(a) * 2.0, 12);
+          }
+          this.showToast('✅ 信标骇入完成！已空投【超导进化舱】+ 充能 35% 超载必杀！');
+        } else {
+          this.bonusCoresEarned += 30;
+          this.spawnPowerUp(bx, bz, 'frenzy');
+          for (const side of [-1, 1]) {
+            this.spawnEnemy(3, bx + side * 12, bz - 10, true);
+          }
+          this.vfx.spawnDamageNumber(bx, bz, '+💎30 核心!', true, '#fef08a');
+          this.showToast('🩸 狂猎祭坛完成！已获 +💎30 超导核心 + 狂暴球，双金甲统领降临！');
+        }
+      }
+    }
+  }
+
+  // =========================================================================
+  // Spatial Hash Grid
   // =========================================================================
   private rebuildSpatialGrid(): void {
     this.gridHead.fill(-1);
@@ -1867,7 +2404,7 @@ class NeonOverdriveGame {
     radius: number,
     visit: (idx: number, dx: number, dz: number, d2: number) => void
   ): void {
-    const padR = radius + 1.6; // Include elite hitbox margin
+    const padR = radius + 1.6;
     const r2 = radius * radius;
     const minGx = Math.max(0, Math.floor((cx - padR - this.gridOriginX) / GRID_CELL));
     const maxGx = Math.min(GRID_DIM - 1, Math.floor((cx + padR - this.gridOriginX) / GRID_CELL));
@@ -1895,7 +2432,7 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Player Locomotion + Kinetic Burst Dash + Perfect Dodge Witch-Time
+  // Player Locomotion + Dash + Perfect Dodge Witch-Time
   // =========================================================================
   private stepPlayerAndDash(dt: number, rawDt: number): void {
     this.dashMaxCd = this.getDashMaxCd();
@@ -2035,28 +2572,47 @@ class NeonOverdriveGame {
     this.sunLight.target.position.set(this.px, 0, this.pz);
   }
 
-  private isPlayerInBossTelegraphDanger(): boolean {
-    if (!this.bossActive) return false;
-    if (Math.hypot(this.bossX - this.px, this.bossZ - this.pz) < 3.9) return true;
-    if (this.bossMode === 'charge_windup' || this.bossMode === 'charge_dash') {
-      const endX = this.bossX + Math.sin(this.bossChargeYaw) * this.bossChargeLen;
-      const endZ = this.bossZ - Math.cos(this.bossChargeYaw) * this.bossChargeLen;
-      if (this.pointToSegmentDistSq(this.px, this.pz, this.bossX, this.bossZ, endX, endZ) < 2.2 * 2.2) {
-        return true;
+  private isPlayerInImminentDanger(): boolean {
+    if (this.bossActive) {
+      if (Math.hypot(this.bossX - this.px, this.bossZ - this.pz) < 3.9) return true;
+      if (this.bossMode === 'charge_windup' || this.bossMode === 'charge_dash') {
+        const endX = this.bossX + Math.sin(this.bossChargeYaw) * this.bossChargeLen;
+        const endZ = this.bossZ - Math.cos(this.bossChargeYaw) * this.bossChargeLen;
+        if (
+          this.pointToSegmentDistSq(this.px, this.pz, this.bossX, this.bossZ, endX, endZ) <
+          2.2 * 2.2
+        ) {
+          return true;
+        }
       }
-    }
-    if (this.bossMode === 'laser_windup' || this.bossMode === 'laser_sweep') {
-      for (let b = 0; b < 4; b++) {
-        const a = this.bossLaserYaw + (b * Math.PI) / 2;
-        const ex = this.bossX + Math.sin(a) * 17.5;
-        const ez = this.bossZ - Math.cos(a) * 17.5;
-        if (this.pointToSegmentDistSq(this.px, this.pz, this.bossX, this.bossZ, ex, ez) < 1.8 * 1.8) {
+      if (this.bossMode === 'laser_windup' || this.bossMode === 'laser_sweep') {
+        for (let b = 0; b < 4; b++) {
+          const a = this.bossLaserYaw + (b * Math.PI) / 2;
+          const ex = this.bossX + Math.sin(a) * 17.5;
+          const ez = this.bossZ - Math.cos(a) * 17.5;
+          if (
+            this.pointToSegmentDistSq(this.px, this.pz, this.bossX, this.bossZ, ex, ez) <
+            1.8 * 1.8
+          ) {
+            return true;
+          }
+        }
+      }
+      for (const bm of this.bossMeteors) {
+        if (bm.active && Math.hypot(this.px - bm.x, this.pz - bm.z) < bm.radius + 0.6) {
           return true;
         }
       }
     }
-    for (const bm of this.bossMeteors) {
-      if (bm.active && Math.hypot(this.px - bm.x, this.pz - bm.z) < bm.radius + 0.6) {
+    // Check Magma Vent hazard telegraphs
+    for (const sh of this.stageHazards) {
+      if (sh.active && !sh.cryo && sh.age > sh.dur * 0.45) {
+        if (Math.hypot(this.px - sh.x, this.pz - sh.z) < sh.radius + 0.4) return true;
+      }
+    }
+    // Check incoming Sniper Drone plasma bolts!
+    for (let i = 0; i < MAX_EPROJ; i++) {
+      if (this.epActive[i] && Math.hypot(this.epX[i] - this.px, this.epZ[i] - this.pz) < 2.35) {
         return true;
       }
     }
@@ -2076,7 +2632,7 @@ class NeonOverdriveGame {
       this.animActions.Jump.reset().play();
     }
 
-    let closeDanger = this.isPlayerInBossTelegraphDanger();
+    let closeDanger = this.isPlayerInImminentDanger();
     if (!closeDanger) {
       this.forEachEnemyInRadius(this.px, this.pz, 2.45, () => {
         closeDanger = true;
@@ -2091,6 +2647,7 @@ class NeonOverdriveGame {
     if (closeDanger && this.witchTimer <= 0) {
       this.witchTimer = 0.58;
       this.dashCd *= 0.65;
+      this.addOverdriveCharge(18);
       if (typeof navigator.vibrate === 'function') navigator.vibrate([18, 28, 36]);
       this.audio.playPerfectDodge();
       this.audio.setBulletTimeMuffle(true);
@@ -2151,14 +2708,16 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Wave Director
+  // Wave Director + 5th Archetype Sniper Drone
   // =========================================================================
   private getWaveScale(): number {
     const mins = this.runTime / 60;
-    if (mins < 3) return 1 + mins * 0.22;
-    if (mins < 6) return 1.66 + (mins - 3) * 0.62;
-    if (mins < 9) return 3.52 + (mins - 6) * 1.45;
-    return 7.87 + (mins - 9) * 3.1;
+    let base = 1;
+    if (mins < 3) base = 1 + mins * 0.22;
+    else if (mins < 6) base = 1.66 + (mins - 3) * 0.62;
+    else if (mins < 9) base = 3.52 + (mins - 6) * 1.45;
+    else base = 7.87 + (mins - 9) * 3.1;
+    return base * this.currentStage.enemyHpMult;
   }
 
   private stepWaveDirector(dt: number): void {
@@ -2215,39 +2774,43 @@ class NeonOverdriveGame {
       const key = `ring_${rt}`;
       if (t >= rt && !this.triggeredEvents.has(key)) {
         this.triggeredEvents.add(key);
-        this.spawnRingWave(34, mins >= 5 ? 2 : 0, 21.5);
-        this.showToast('🚨 警告：侦测到环形机甲包围网！集中火力撕开缺口！');
+        this.spawnRingWave(30, mins >= 4 ? 4 : 0, 21.5);
+        this.showToast('🚨 警告：侦测到环形电浆狙击包围网！灵活冲刺闪避红晶弹幕！');
       }
     }
 
     if (t >= 240 && !this.triggeredEvents.has('boss_1')) {
       this.triggeredEvents.add('boss_1');
-      this.spawnBoss(1, '⚠ 阶段 BOSS：六翼重装机神·壹型', 3200);
+      this.spawnBoss(1, '⚠ 阶段 BOSS：六翼重装机神·壹型', 3400);
     } else if (t >= 480 && !this.triggeredEvents.has('boss_2')) {
       this.triggeredEvents.add('boss_2');
-      this.spawnBoss(2, '⚠ 阶段 BOSS：六翼重装机神·贰型', 12500);
+      this.spawnBoss(2, '⚠ 阶段 BOSS：六翼重装机神·贰型', 13500);
     } else if (t >= 720 && !this.triggeredEvents.has('boss_3')) {
       this.triggeredEvents.add('boss_3');
-      this.spawnBoss(3, '☠ 终局泰坦：奥米茄炽天使机神 (击败即破关!)', 36000);
+      this.spawnBoss(3, '☠ 终局泰坦：奥米茄炽天使机神 (击败即破关!)', 38000);
     }
   }
 
   private pickEnemyType(mins: number): number {
     const r = Math.random();
+    const sniperBoost = this.isDailyRun && this.dailyModTitle === '狙击矩阵超频' ? 0.14 : 0;
     if (mins < 1.5) {
+      if (r < 0.12 + sniperBoost) return 4;
       if (r < 0.68) return 0;
-      if (r < 0.85) return 2;
+      if (r < 0.86) return 2;
       return 1;
     }
     if (mins < 4.5) {
-      if (r < 0.48) return 0;
+      if (r < 0.16 + sniperBoost) return 4;
+      if (r < 0.52) return 0;
       if (r < 0.72) return 1;
-      if (r < 0.92) return 2;
+      if (r < 0.9) return 2;
       return 3;
     }
-    if (r < 0.36) return 0;
-    if (r < 0.58) return 1;
-    if (r < 0.8) return 2;
+    if (r < 0.18 + sniperBoost) return 4;
+    if (r < 0.44) return 0;
+    if (r < 0.64) return 1;
+    if (r < 0.84) return 2;
     return 3;
   }
 
@@ -2269,8 +2832,8 @@ class NeonOverdriveGame {
     if (idx < 0) return;
 
     const scale = this.getWaveScale();
-    const baseHps = [22, 32, 90, 230];
-    const baseSpds = [3.9, 6.0, 3.1, 2.45];
+    const baseHps = [22, 32, 90, 230, 46];
+    const baseSpds = [3.9, 6.0, 3.1, 2.45, 4.6];
 
     this.eActive[idx] = 1;
     this.eType[idx] = type;
@@ -2280,13 +2843,58 @@ class NeonOverdriveGame {
     const hp = baseHps[type] * scale * (elite ? 9.5 : 1);
     this.eHp[idx] = hp;
     this.eMaxHp[idx] = hp;
-    this.eSpeed[idx] = baseSpds[type] * (elite ? 1.12 : 1);
+    this.eSpeed[idx] = baseSpds[type] * this.currentStage.enemySpdMult * (elite ? 1.12 : 1);
     this.eFlash[idx] = 0;
     this.eWobble[idx] = 0;
     this.eKx[idx] = 0;
     this.eKz[idx] = 0;
     this.eFuse[idx] = 0;
+    this.eChill[idx] = 0;
+    this.eShootTimer[idx] = 1.4 + Math.random() * 1.6;
     this.activeEnemyCount++;
+  }
+
+  private spawnEnemyBolt(x: number, z: number, vx: number, vz: number, dmg: number): void {
+    const idx = this.epCursor;
+    this.epCursor = (this.epCursor + 1) % MAX_EPROJ;
+    this.epActive[idx] = 1;
+    this.epX[idx] = x;
+    this.epZ[idx] = z;
+    this.epVx[idx] = vx;
+    this.epVz[idx] = vz;
+    this.epLife[idx] = 2.6;
+    this.epDmg[idx] = dmg;
+  }
+
+  private stepEnemyProjectiles(dt: number): void {
+    for (let i = 0; i < MAX_EPROJ; i++) {
+      if (!this.epActive[i]) continue;
+      this.epLife[i] -= dt;
+      if (this.epLife[i] <= 0) {
+        this.epActive[i] = 0;
+        this.hideInstance(this.eProjMesh, i);
+        continue;
+      }
+      this.epX[i] += this.epVx[i] * dt;
+      this.epZ[i] += this.epVz[i] * dt;
+
+      const d2 = (this.epX[i] - this.px) ** 2 + (this.epZ[i] - this.pz) ** 2;
+      if (d2 < 0.78 * 0.78) {
+        this.epActive[i] = 0;
+        this.hideInstance(this.eProjMesh, i);
+        if (this.iFrameTimer <= 0 && this.dashActiveTimer <= 0) {
+          this.damagePlayer(this.epDmg[i]);
+        }
+        continue;
+      }
+
+      this.dummy.position.set(this.epX[i], 0.92, this.epZ[i]);
+      this.dummy.rotation.set(this.runTime * 8, this.runTime * 10, 0);
+      this.dummy.scale.setScalar(1.0);
+      this.dummy.updateMatrix();
+      this.eProjMesh.setMatrixAt(i, this.dummy.matrix);
+    }
+    this.eProjMesh.instanceMatrix.needsUpdate = true;
   }
 
   public spawnBoss(stage: number, title: string, hp: number): void {
@@ -2295,11 +2903,12 @@ class NeonOverdriveGame {
     this.bossStage = stage;
     this.bossX = this.px + 7.2;
     this.bossZ = this.pz - 5.6;
-    this.bossHp = hp;
-    this.bossMaxHp = hp;
+    const scaledHp = Math.round(hp * this.currentStage.enemyHpMult);
+    this.bossHp = scaledHp;
+    this.bossMaxHp = scaledHp;
     this.bossWobble = 0;
     this.bossMode = 'chase';
-    this.bossSkillTimer = 1.4; // Triggers first red-carpet telegraph quickly!
+    this.bossSkillTimer = 1.4;
     this.bossPatternIdx = 0;
     this.arenaCenter.set(this.px, this.pz);
 
@@ -2317,13 +2926,10 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Enemy Step + Kamikaze Spatial-Hash Friendly-Fire
+  // Enemy Step (Includes Type 4 Ranged Sniper Drone & Cryo Chill!)
   // =========================================================================
   private stepEnemies(dt: number, rawDt: number): void {
-    this.typeSlotCounts[0] = 0;
-    this.typeSlotCounts[1] = 0;
-    this.typeSlotCounts[2] = 0;
-    this.typeSlotCounts[3] = 0;
+    for (let t = 0; t < 5; t++) this.typeSlotCounts[t] = 0;
 
     let count = 0;
     for (let i = 0; i < MAX_ENEMIES; i++) {
@@ -2331,6 +2937,11 @@ class NeonOverdriveGame {
       count++;
       const type = this.eType[i];
       const elite = this.eElite[i] === 1;
+
+      if (this.eChill[i] > 0) {
+        this.eChill[i] = Math.max(0, this.eChill[i] - dt);
+      }
+      const chillMult = this.eChill[i] > 0 ? 0.45 : 1.0;
 
       let dx = this.px - this.eX[i];
       let dz = this.pz - this.eZ[i];
@@ -2350,7 +2961,7 @@ class NeonOverdriveGame {
         if (this.eFuse[i] === 0) {
           this.vfx.spawnRing(this.eX[i], this.eZ[i], 3.3, 0xf43f5e, 0.72);
         }
-        this.eFuse[i] += dt;
+        this.eFuse[i] += dt * chillMult;
         if (this.eFuse[i] >= 0.72) {
           this.detonateKamikaze(i);
           continue;
@@ -2380,9 +2991,38 @@ class NeonOverdriveGame {
           }
         }
 
-        const spd = this.eSpeed[i];
-        this.eX[i] += ((dx / dist) * spd + sepX + this.eKx[i]) * dt;
-        this.eZ[i] += ((dz / dist) * spd + sepZ + this.eKz[i]) * dt;
+        const spd = this.eSpeed[i] * chillMult;
+        if (type === 4) {
+          // Type 4 Sniper Drone: Orbit at 10m..13m and fire high-speed plasma bolts!
+          const nx = dx / dist;
+          const nz = dz / dist;
+          const radial = dist > 13.2 ? 1.0 : dist < 8.8 ? -0.65 : 0.0;
+          const strafeSign = i % 2 === 0 ? 1 : -1;
+          const moveX = (nx * radial - nz * 0.75 * strafeSign) * spd;
+          const moveZ = (nz * radial + nx * 0.75 * strafeSign) * spd;
+          this.eX[i] += (moveX + sepX + this.eKx[i]) * dt;
+          this.eZ[i] += (moveZ + sepZ + this.eKz[i]) * dt;
+
+          if (dist < 18.5) {
+            this.eShootTimer[i] -= dt * chillMult;
+            if (this.eShootTimer[i] <= 0) {
+              this.eShootTimer[i] = 2.75;
+              const boltSpd = 12.8;
+              this.spawnEnemyBolt(
+                this.eX[i],
+                this.eZ[i],
+                nx * boltSpd,
+                nz * boltSpd,
+                Math.round(14 * this.currentStage.enemyHpMult)
+              );
+              this.vfx.spawnHitFlare(this.eX[i] + nx * 0.6, 0.95, this.eZ[i] + nz * 0.6, 0xff2a55, 1.1);
+              this.audio.playSniperShot();
+            }
+          }
+        } else {
+          this.eX[i] += ((dx / dist) * spd + sepX + this.eKx[i]) * dt;
+          this.eZ[i] += ((dz / dist) * spd + sepZ + this.eKz[i]) * dt;
+        }
 
         const kDecay = Math.exp(-10 * dt);
         this.eKx[i] *= kDecay;
@@ -2391,7 +3031,7 @@ class NeonOverdriveGame {
 
       const hitRadius = elite ? 1.55 : 0.95;
       if (dist < hitRadius && this.iFrameTimer <= 0 && this.dashActiveTimer <= 0) {
-        const rawDmg = [8, 14, 14, 20][type] * (elite ? 1.5 : 1);
+        const rawDmg = [8, 14, 14, 20, 10][type] * (elite ? 1.5 : 1);
         this.damagePlayer(rawDmg);
       }
 
@@ -2412,8 +3052,11 @@ class NeonOverdriveGame {
       const im = this.enemyMeshes[type];
       const baseScale = elite ? 1.85 : 1.08;
       const stridePhase = this.runTime * (type <= 1 ? 14 : 9) + i * 1.7;
-      const walkBob = Math.abs(Math.sin(stridePhase)) * (type === 3 ? 0.05 : 0.11);
-      const walkRoll = Math.sin(stridePhase) * (type <= 1 ? 0.09 : 0.06);
+      const walkBob =
+        type === 4
+          ? Math.sin(stridePhase * 0.6) * 0.14
+          : Math.abs(Math.sin(stridePhase)) * (type === 3 ? 0.05 : 0.11);
+      const walkRoll = Math.sin(stridePhase) * (type <= 1 ? 0.09 : 0.05);
       const fusePulse =
         type === 1 && this.eFuse[i] > 0 ? 1 + Math.sin(this.eFuse[i] * 35) * 0.28 : 1;
 
@@ -2433,6 +3076,10 @@ class NeonOverdriveGame {
         } else {
           im.setColorAt(slot, this.tmpColor.setRGB(2.5, 0.45, 0.9));
         }
+      } else if (this.eChill[i] > 0) {
+        im.setColorAt(slot, this.tmpColor.setRGB(0.55, 1.85, 2.5));
+      } else if (type === 4 && this.eShootTimer[i] < 0.45) {
+        im.setColorAt(slot, this.tmpColor.setRGB(2.8, 0.55, 0.75));
       } else if (type === 1 && this.eFuse[i] > 0) {
         im.setColorAt(slot, this.tmpColor.setRGB(2.4, 1.6, 0.4));
       } else if (elite) {
@@ -2443,7 +3090,7 @@ class NeonOverdriveGame {
     }
 
     this.activeEnemyCount = count;
-    for (let t = 0; t < 4; t++) {
+    for (let t = 0; t < 5; t++) {
       const im = this.enemyMeshes[t];
       im.count = this.typeSlotCounts[t];
       im.instanceMatrix.needsUpdate = true;
@@ -2473,7 +3120,7 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Boss 3-Attack State Machine with Ground Red Telegraphs (P1.1)
+  // Boss 3-Attack State Machine
   // =========================================================================
   private stepBoss(dt: number, rawDt: number): void {
     if (!this.bossActive) return;
@@ -2496,7 +3143,6 @@ class NeonOverdriveGame {
         const pick = this.bossPatternIdx % 3;
         this.bossPatternIdx++;
         if (pick === 0) {
-          // 1. Crimson Red-Carpet Dash Lock-On
           this.bossMode = 'charge_windup';
           this.bossSkillTimer = 0.78;
           this.bossChargeYaw = Math.atan2(dx, -dz);
@@ -2507,13 +3153,11 @@ class NeonOverdriveGame {
           this.bossChargeCarpet.scale.set(1, 1, this.bossChargeLen);
           this.audio.playBossTelegraph();
         } else if (pick === 1) {
-          // 2. 4-Way Rotating Crimson Cross-Lasers
           this.bossMode = 'laser_windup';
           this.bossSkillTimer = 0.68;
           this.bossLaserYaw = Math.atan2(dx, -dz) + Math.PI * 0.25;
           this.audio.playBossTelegraph();
         } else {
-          // 3. Multi-Circle Orbital Meteor Barrage
           this.bossMode = 'meteor_windup';
           this.bossSkillTimer = 0.9;
           this.audio.playBossTelegraph();
@@ -2558,7 +3202,6 @@ class NeonOverdriveGame {
       const dashSpd = 26.5 + this.bossStage * 2;
       this.bossX += Math.sin(this.bossChargeYaw) * dashSpd * dt;
       this.bossZ += -Math.cos(this.bossChargeYaw) * dashSpd * dt;
-      // Clamp Boss inside arena
       const adx = this.bossX - this.arenaCenter.x;
       const adz = this.bossZ - this.arenaCenter.y;
       const ad = Math.hypot(adx, adz);
@@ -2610,7 +3253,10 @@ class NeonOverdriveGame {
         if (checkPlayer && this.iFrameTimer <= 0 && this.dashActiveTimer <= 0) {
           const ex = this.bossX + Math.sin(yaw) * 17.5;
           const ez = this.bossZ - Math.cos(yaw) * 17.5;
-          if (this.pointToSegmentDistSq(this.px, this.pz, this.bossX, this.bossZ, ex, ez) < 0.85 * 0.85) {
+          if (
+            this.pointToSegmentDistSq(this.px, this.pz, this.bossX, this.bossZ, ex, ez) <
+            0.85 * 0.85
+          ) {
             this.damagePlayer(18 + this.bossStage * 5);
           }
         }
@@ -2627,7 +3273,6 @@ class NeonOverdriveGame {
       }
     }
 
-    // Step active Boss Meteor ground circles
     for (const bm of this.bossMeteors) {
       if (!bm.active) continue;
       bm.age += dt;
@@ -2691,7 +3336,7 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // All 6 Core Weapons + 6 Hyper Evolutions (P0.2)
+  // All 6 Core Weapons + 6 Hyper Evolutions
   // =========================================================================
   private stepWeapons(dt: number): void {
     const cdMult = this.getCooldownMult();
@@ -2700,7 +3345,6 @@ class NeonOverdriveGame {
     const durSpdMult = this.getDurationSpeedMult();
     const extraProj = this.getExtraProj();
 
-    // 1. Plasma Kunai / ★ Phantom Barrage
     const kunaiLv = this.weaponLevels.kunai || 0;
     if (kunaiLv > 0) {
       const hyper = !!this.weaponHyper.kunai;
@@ -2740,7 +3384,6 @@ class NeonOverdriveGame {
       }
     }
 
-    // 2. Orbiting Saw / ★ Corona Halo
     const sawLv = this.weaponLevels.saw || 0;
     if (sawLv > 0) {
       const hyper = !!this.weaponHyper.saw;
@@ -2797,7 +3440,6 @@ class NeonOverdriveGame {
       for (const m of this.sawMeshes) m.visible = false;
     }
 
-    // 3. Tesla Arc / ★ Thor Matrix
     const arcLv = this.weaponLevels.arc || 0;
     if (arcLv > 0) {
       const hyper = !!this.weaponHyper.arc;
@@ -2820,7 +3462,6 @@ class NeonOverdriveGame {
       }
     }
 
-    // 4. Rail Laser Sweep / ★ Prism Obliterator
     const laserLv = this.weaponLevels.laser || 0;
     if (laserLv > 0) {
       const hyper = !!this.weaponHyper.laser;
@@ -2896,7 +3537,6 @@ class NeonOverdriveGame {
       for (const m of this.laserBeams) m.visible = false;
     }
 
-    // 5. Nano Gravity Pool / ★ Singularity Collapse
     const gravLv = this.weaponLevels.gravity || 0;
     if (gravLv > 0) {
       const hyper = !!this.weaponHyper.gravity;
@@ -2919,7 +3559,6 @@ class NeonOverdriveGame {
       }
     }
 
-    // 6. Orbital Ion Mortar / ★ Skynet Judgement
     const orbLv = this.weaponLevels.orbital || 0;
     if (orbLv > 0) {
       const hyper = !!this.weaponHyper.orbital;
@@ -3010,7 +3649,6 @@ class NeonOverdriveGame {
       const pulse = 0.92 + Math.sin(gw.age * 16) * 0.08;
       gw.ringA.scale.setScalar(gw.radius * pulse);
 
-      // Pull enemies smoothly into the singularity core!
       const pullStrength = gw.hyper ? 9.8 : 5.4;
       this.forEachEnemyInRadius(gw.x, gw.z, gw.radius, (idx, dx, dz, d2) => {
         if (d2 > 0.25) {
@@ -3041,7 +3679,14 @@ class NeonOverdriveGame {
         gw.group.visible = false;
         this.audio.playGravityWell(true, gw.hyper);
         this.vfx.spawnRing(gw.x, gw.z, gw.radius * 1.25, gw.hyper ? 0xf472b6 : 0xe879f9, 0.42);
-        this.vfx.spawnBurst(gw.x, 0.5, gw.z, gw.hyper ? 0xf472b6 : 0xc084fc, gw.hyper ? 28 : 16, 11);
+        this.vfx.spawnBurst(
+          gw.x,
+          0.5,
+          gw.z,
+          gw.hyper ? 0xf472b6 : 0xc084fc,
+          gw.hyper ? 28 : 16,
+          11
+        );
         this.addTrauma(gw.hyper ? 0.35 : 0.18);
         this.punchCamera(gw.hyper ? -95 : -55, 0.03);
         this.damageCircle(
@@ -3395,7 +4040,7 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Damage, DPS Tracking, Zero-Timer Combo Pill & Phoenix Auto-Revive
+  // Damage, Overdrive Energy Gain & Phoenix Auto-Revive
   // =========================================================================
   private damageEnemy(
     idx: number,
@@ -3407,8 +4052,9 @@ class NeonOverdriveGame {
   ): boolean {
     if (!this.eActive[idx]) return false;
     const crit = Math.random() < this.getCritChance();
+    const chillAmp = this.eChill[idx] > 0 ? 1.35 : 1.0;
     const variance = 0.9 + Math.random() * 0.2;
-    const finalDmg = Math.max(1, Math.round(rawDmg * (crit ? 1.85 : 1.0) * variance));
+    const finalDmg = Math.max(1, Math.round(rawDmg * chillAmp * (crit ? 1.85 : 1.0) * variance));
 
     const actualDealt = Math.min(this.eHp[idx], finalDmg);
     this.dpsTracker.record(weaponId, actualDealt, this.runTime);
@@ -3436,6 +4082,7 @@ class NeonOverdriveGame {
       this.eActive[idx] = 0;
       this.activeEnemyCount = Math.max(0, this.activeEnemyCount - 1);
       this.kills++;
+      this.addOverdriveCharge(elite ? 18 : 2.1);
 
       this.comboCount++;
       this.comboTimer = 2.2;
@@ -3471,7 +4118,7 @@ class NeonOverdriveGame {
         this.spawnChest(x, z);
         this.spawnPowerUp(x + 1.4, z, Math.random() < 0.5 ? 'frenzy' : 'magnet');
       } else {
-        const xpVals = [1, 2, 5, 22];
+        const xpVals = [1, 2, 5, 22, 6];
         this.spawnGem(x, z, xpVals[type]);
         if (type === 3 && Math.random() < 0.1) {
           this.spawnPowerUp(x, z, Math.random() < 0.55 ? 'magnet' : 'frenzy');
@@ -3498,6 +4145,7 @@ class NeonOverdriveGame {
       const bz = this.bossZ;
       const stg = this.bossStage;
       this.bossesDefeated++;
+      this.addOverdriveCharge(50);
       this.clearBossVisuals();
       document.getElementById('boss-banner')!.classList.add('hidden');
 
@@ -3542,7 +4190,16 @@ class NeonOverdriveGame {
         this.audio.playPowerup('revive');
         this.vfx.spawnSkyPillar(this.px, this.pz, 3.2, 0x34d399, 0.55);
         this.vfx.spawnRing(this.px, this.pz, 14, 0xfbbf24, 0.6);
-        this.damageCircle(this.px, this.pz, 11, 260 * this.getDamageMult(), 22, 0x34d399, undefined, true);
+        this.damageCircle(
+          this.px,
+          this.pz,
+          11,
+          260 * this.getDamageMult(),
+          22,
+          0x34d399,
+          undefined,
+          true
+        );
         this.showToast('🛡 涅槃协议激活！恢复 65% 装甲并震碎全屏近身敌群！');
         return;
       }
@@ -3551,7 +4208,7 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // 3D Crystal Clusters, Orbital Supply Pods & Dopamine Power-Up Drops (P0.3)
+  // Gems, Supply Pods & Power-Ups
   // =========================================================================
   private spawnGem(x: number, z: number, val: number): void {
     if (this.activeGemCount > 460 && val < 20) {
@@ -3616,14 +4273,16 @@ class NeonOverdriveGame {
     for (let i = 0; i < MAX_GEMS; i++) {
       if (this.gActive[i]) {
         this.gState[i] = 1;
-        this.gMagAge[i] = 0.14; // Skip push-back and vacuum immediately at high velocity!
+        this.gMagAge[i] = 0.14;
         pulled++;
       }
     }
     this.audio.playPowerup('magnet');
     this.vfx.spawnRing(this.px, this.pz, 18, 0x38bdf8, 0.55);
     this.vfx.spawnDamageNumber(this.px, this.pz, '🧲 全屏磁吸!', true, '#67e8f9');
-    this.showToast(`🧲 超导磁铁启动！全图 ${pulled} 枚数据晶体尽数归仓！`);
+    if (pulled > 0) {
+      this.showToast(`🧲 超导磁铁启动！全图 ${pulled} 枚数据晶体尽数归仓！`);
+    }
   }
 
   private activateFrenzyOrb(): void {
@@ -3783,8 +4442,42 @@ class NeonOverdriveGame {
   }
 
   // =========================================================================
-  // Illustrated Upgrade Cards, Meta-Hangar UI & Post-Run DPS Leaderboard
+  // UI Renderers: Stage Selector, Upgrade Cards, Hangar & DPS Breakdown
   // =========================================================================
+  private renderStageSelector(): void {
+    const daily = getDailyChallengeSpec();
+    const claimed = this.metaSave.lastDailyClaimDate === daily.dateKey;
+    const dailyBtn = document.getElementById('btn-daily-run')!;
+    dailyBtn.textContent = claimed
+      ? `📅 每日特遣：${daily.modifierTitle} (今日已领)`
+      : `📅 每日特遣：${daily.modifierTitle} (+💎${daily.bonusCores})`;
+
+    const grid = document.getElementById('stage-grid')!;
+    grid.innerHTML = STAGES.map((s, idx) => {
+      const cleared = this.metaSave.clearedStages.includes(s.id);
+      return `
+      <div class="stage-card ${idx === this.selectedStageIdx ? 'selected' : ''}" data-stg="${idx}">
+        <img class="stage-thumb" src="${s.iconImg}" alt="${s.name}" />
+        <div>
+          <div class="stage-title-row">
+            <span class="stage-name">${s.name}</span>
+            <span class="stage-badge">${cleared ? '★通关 · ' : ''}${s.badge}</span>
+          </div>
+          <div class="stage-desc">${s.hazardDesc}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    grid.querySelectorAll('.stage-card').forEach((el) => {
+      el.addEventListener('click', () => {
+        this.audio.unlock();
+        this.selectedStageIdx = Number((el as HTMLElement).dataset.stg);
+        this.applyStageEnvironment();
+        this.renderStageSelector();
+      });
+    });
+  }
+
   private openUpgradeModal(): void {
     this.pendingLevels--;
     this.vfx.spawnRing(this.px, this.pz, 4.8, 0xa855f7, 0.35);
@@ -4005,11 +4698,11 @@ class NeonOverdriveGame {
           <img class="card-art-img" src="${m.portraitImg}" alt="${m.name}" />
         </div>
         <div class="card-title">${m.name}</div>
-        <div class="card-role">${m.role}</div>
+        <div class="card-role">${m.role} · 💥必杀：${m.overdriveName}</div>
         <div class="card-desc">${m.desc}</div>
         <div class="card-pair-hint">
           <img class="pair-mini-icon" src="${startW.iconImg}" alt="${startW.name}" />
-          <span>初始搭载：${startW.name} · 移速 ${m.speed}</span>
+          <span>初始：${startW.name} · 移速 ${m.speed}</span>
         </div>
       </div>`;
     }).join('');
@@ -4124,6 +4817,23 @@ class NeonOverdriveGame {
       touchDashBtn.classList.toggle('cooling', dashReadyPct < 99.5);
     }
 
+    // Overdrive Ultimate Gauge (Desktop + Mobile Touch Button)
+    const ultPct = Math.floor(this.overdriveCharge);
+    const ultReady = ultPct >= 100;
+    document.getElementById('ult-bar-fill')!.style.width = `${ultPct}%`;
+    const ultLabel = document.getElementById('ult-label')!;
+    ultLabel.textContent = ultReady
+      ? `[Q] 💥${this.currentMech.overdriveName}!`
+      : `[Q] 超载 ${ultPct}%`;
+    ultLabel.parentElement!.classList.toggle('ready', ultReady);
+
+    const touchUltBtn = document.getElementById('btn-touch-ult');
+    if (touchUltBtn) {
+      touchUltBtn.style.setProperty('--ult-pct', `${ultPct}%`);
+      touchUltBtn.classList.toggle('ready', ultReady);
+      document.getElementById('touch-ult-txt')!.textContent = ultReady ? '满能!' : `${ultPct}%`;
+    }
+
     const frenzyEl = document.getElementById('buff-frenzy')!;
     if (this.frenzyTimer > 0) {
       frenzyEl.classList.remove('hidden');
@@ -4140,13 +4850,13 @@ class NeonOverdriveGame {
 
     const mins = this.runTime / 60;
     const stageNames = [
-      'STAGE 1 · 觉醒热身',
-      'STAGE 2 · 火力成型',
-      'STAGE 3 · 超武狂潮',
-      'STAGE 4 · 终局超载',
+      'WAVE 1 · 觉醒热身',
+      'WAVE 2 · 火力成型',
+      'WAVE 3 · 超武狂潮',
+      'WAVE 4 · 终局超载',
     ];
     document.getElementById('wave-label')!.textContent =
-      stageNames[Math.min(3, Math.floor(mins / 3))];
+      `${this.currentStage.name.split(' · ')[0]} · ${stageNames[Math.min(3, Math.floor(mins / 3))]}`;
 
     document.getElementById('kill-count')!.textContent = String(this.kills);
     document.getElementById('enemy-count')!.textContent = String(this.activeEnemyCount);
@@ -4191,11 +4901,27 @@ class NeonOverdriveGame {
 
   private finishRun(victory: boolean): void {
     const secs = Math.floor(this.runTime);
+    const daily = getDailyChallengeSpec();
+    let extraBonus = this.bonusCoresEarned;
+    if (
+      this.isDailyRun &&
+      (victory || secs >= 45) &&
+      this.metaSave.lastDailyClaimDate !== daily.dateKey
+    ) {
+      extraBonus += daily.bonusCores;
+      this.metaSave.lastDailyClaimDate = daily.dateKey;
+    }
+    if (victory && !this.metaSave.clearedStages.includes(this.currentStage.id)) {
+      this.metaSave.clearedStages.push(this.currentStage.id);
+    }
+
     const earnedCores = computeRunRewardCores(
       this.kills,
       this.runTime,
       this.bossesDefeated,
-      victory
+      victory,
+      this.currentStage.coreMult,
+      extraBonus
     );
     this.metaSave.cores += earnedCores;
     this.metaSave.totalRuns++;
@@ -4208,18 +4934,18 @@ class NeonOverdriveGame {
     this.setScreen(victory ? 'victory' : 'gameover');
     this.audio.playFanfare(victory);
     document.getElementById('result-tag')!.textContent = victory
-      ? 'HYPER VICTORY · 12:00 CLEARED'
-      : 'SIGNAL LOST · MECH DESTROYED';
+      ? `HYPER VICTORY · ${this.currentStage.name}`
+      : `SIGNAL LOST · ${this.currentStage.name}`;
     document.getElementById('result-title')!.textContent = victory
-      ? '六翼泰坦击破 · 完美通关！'
+      ? '六翼泰坦击破 · 战区完美平定！'
       : '装甲归零 · 战术回收结算';
 
     const hyperCount = Object.values(this.weaponHyper).filter(Boolean).length;
     document.getElementById('result-stats')!.innerHTML = `
-      <div class="result-row"><span>存活时间</span><strong>${Math.floor(secs / 60)}分 ${secs % 60}秒</strong></div>
+      <div class="result-row"><span>作战战区 / 存活</span><strong>${this.currentStage.name.split(' · ')[0]} · ${Math.floor(secs / 60)}分${secs % 60}秒</strong></div>
       <div class="result-row"><span>总击坠敌机</span><strong>${this.kills} 台</strong></div>
       <div class="result-row"><span>最终升阶 / 超武</span><strong>LV ${this.level} · ${hyperCount} 超武</strong></div>
-      <div class="result-row reward"><span>本局核心奖励</span><strong>+💎 ${earnedCores} (持有 ${this.metaSave.cores})</strong></div>
+      <div class="result-row reward"><span>本局核心奖励 (${this.currentStage.coreMult}x)</span><strong>+💎 ${earnedCores} (持有 ${this.metaSave.cores})</strong></div>
     `;
 
     const rows = this.dpsTracker.buildBreakdown(this.runTime);
@@ -4280,15 +5006,22 @@ class NeonOverdriveGame {
     window.addEventListener('resize', () => this.onResize());
     window.addEventListener('orientationchange', () => setTimeout(() => this.onResize(), 60));
 
-    // Unlock WebAudio on mobile iOS Safari / Android Chrome first touch
-    window.addEventListener('touchstart', () => {
-      this.enableTouchMode();
-      this.audio.unlock();
-    }, { passive: true });
-    window.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'touch') this.enableTouchMode();
-      this.audio.unlock();
-    }, { passive: true });
+    window.addEventListener(
+      'touchstart',
+      () => {
+        this.enableTouchMode();
+        this.audio.unlock();
+      },
+      { passive: true }
+    );
+    window.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e.pointerType === 'touch') this.enableTouchMode();
+        this.audio.unlock();
+      },
+      { passive: true }
+    );
 
     if (
       window.matchMedia('(pointer: coarse)').matches ||
@@ -4298,7 +5031,6 @@ class NeonOverdriveGame {
       this.enableTouchMode();
     }
 
-    // Floating Multi-Touch Virtual Joystick with Radial Deadzone (0.14)
     const joyZone = document.getElementById('joystick-zone')!;
     const joyBase = document.getElementById('joy-base')!;
     const joyKnob = document.getElementById('joy-knob')!;
@@ -4339,7 +5071,7 @@ class NeonOverdriveGame {
       try {
         joyZone.setPointerCapture(e.pointerId);
       } catch {
-        // Ignore synthetic pointer capture edge cases
+        // Ignore synthetic capture edge cases
       }
       updateStickFromPoint(e.clientX, e.clientY);
     });
@@ -4356,7 +5088,6 @@ class NeonOverdriveGame {
     joyZone.addEventListener('pointerup', endStick);
     joyZone.addEventListener('pointercancel', endStick);
 
-    // Dedicated Touch Phase-Dash Button (isolated pointer so simultaneous move + dash works!)
     const touchDashBtn = document.getElementById('btn-touch-dash')!;
     touchDashBtn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
@@ -4370,9 +5101,23 @@ class NeonOverdriveGame {
     touchDashBtn.addEventListener('pointerup', releaseDashBtn);
     touchDashBtn.addEventListener('pointercancel', releaseDashBtn);
 
+    const touchUltBtn = document.getElementById('btn-touch-ult')!;
+    touchUltBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.enableTouchMode();
+      this.audio.unlock();
+      this.triggerOverdriveUltimate();
+    });
+
     document.getElementById('btn-hud-pause')!.addEventListener('click', () => {
       this.audio.unlock();
       if (this.screen === 'playing') this.setScreen('recipe');
+    });
+
+    document.getElementById('btn-daily-run')!.addEventListener('click', () => {
+      this.audio.unlock();
+      this.startDailyChallenge();
     });
 
     document.getElementById('btn-start')!.addEventListener('click', () => this.startRun());
@@ -4435,6 +5180,14 @@ class NeonOverdriveGame {
         } else if (e.code === 'Digit3') {
           this.selectedMechIdx = 2;
           this.renderTitleCards();
+        } else if (e.code === 'KeyQ') {
+          this.selectedStageIdx = (this.selectedStageIdx + STAGES.length - 1) % STAGES.length;
+          this.applyStageEnvironment();
+          this.renderStageSelector();
+        } else if (e.code === 'KeyE') {
+          this.selectedStageIdx = (this.selectedStageIdx + 1) % STAGES.length;
+          this.applyStageEnvironment();
+          this.renderStageSelector();
         } else if (e.code === 'Digit4') {
           this.buyHangarUpgrade('hull');
         } else if (e.code === 'Digit5') {
@@ -4511,11 +5264,10 @@ class NeonOverdriveGame {
       if (this.screen === 'playing') {
         if (e.code === 'Space' || e.code === 'ShiftLeft') {
           e.preventDefault();
-          this.dashBufferTimer = 0.18;
-          if (this.dashCd <= 0 && this.dashActiveTimer <= 0) {
-            this.dashBufferTimer = 0;
-            this.executeDash();
-          }
+          this.requestBufferedDash();
+        } else if (e.code === 'KeyQ' || e.code === 'KeyE') {
+          e.preventDefault();
+          this.triggerOverdriveUltimate();
         } else if (e.code === 'Tab' || e.code === 'KeyP' || e.code === 'Escape') {
           e.preventDefault();
           this.setScreen('recipe');
@@ -4534,12 +5286,20 @@ class NeonOverdriveGame {
           this.grantXp(this.xpNext);
         } else if (e.code === 'F4') {
           e.preventDefault();
-          this.spawnBoss(1, '⚠ 阶段 BOSS：六翼重装机神·壹型', 3200);
+          this.spawnBoss(1, '⚠ 阶段 BOSS：六翼重装机神·壹型', 3400);
         } else if (e.code === 'F5') {
           e.preventDefault();
           this.spawnPowerUp(this.px - 2.2, this.pz - 2.8, 'magnet');
           this.spawnPowerUp(this.px + 2.2, this.pz - 2.8, 'frenzy');
           this.showToast('[调试] 已在前方投放【全屏磁铁】与【无限超载狂暴球】！');
+        } else if (e.code === 'F6') {
+          e.preventDefault();
+          this.overdriveCharge = 100;
+          this.spawnHackBeacon(true);
+          if (this.currentStage.id !== 'ruins') {
+            this.spawnStageHazard(this.currentStage.id === 'cryo', this.px + 3.5, this.pz - 3.5);
+          }
+          this.showToast('[调试] 已充能 100% 超载必杀 [Q] 并召唤【📡战术骇入信标】！');
         }
       }
     });
@@ -4554,7 +5314,6 @@ class NeonOverdriveGame {
     const h = window.innerHeight;
     const aspect = w / Math.max(1, h);
 
-    // Portrait / narrow mobile camera compensation: preserve horizontal arena visibility!
     if (aspect < 1.05) {
       this.baseFov = 54;
       this.camDistScale = Math.min(1.46, 1.0 + (1.05 - aspect) * 0.72);
@@ -4584,12 +5343,13 @@ class NeonOverdriveGame {
     return {
       modelsLoaded: this.modelsLoaded,
       screen: this.screen,
+      stage: this.currentStage.id,
       fps: this.displayedFps,
       drawCalls: this.renderer.info.render.calls,
       triangles: this.renderer.info.render.triangles,
       activeEnemies: this.activeEnemyCount,
-      combo: this.comboCount,
-      level: this.level,
+      overdriveCharge: this.overdriveCharge,
+      beaconActive: this.beaconActive,
       cores: this.metaSave.cores,
     };
   }

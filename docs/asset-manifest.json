@@ -70,12 +70,23 @@
       "technical_checks_passed": true
     },
     {
-      "id": "ui-3d-raytraced-icons",
-      "file": "public/ui/*.png",
-      "role": "24 Cycles-raytraced 192x192 RGBA transparent 3D hardware illustrations for all 6 weapons, 6 hyper weapons, 7 passive chips, 3 mechs, and 2 fallback modules",
+      "id": "stage-landmarks-and-sniper",
+      "file": "public/models/stage_landmarks.glb",
+      "role": "Magma Foundry Reactor Core, Cryo Quantum Obelisk, Interactive Tactical Hack Beacon Tower, and 5th Enemy Archetype Ranged Sniper Hover Drone",
       "source": {
         "kind": "authored_procedural_dcc",
-        "tool": "Blender 5.3 Cycles Studio Renderer (scripts/build_assets_all.py + scripts/build_p0_assets.py)",
+        "tool": "Blender 5.3 headless Python (scripts/build_scenes_and_drone.py)",
+        "license": "Apache-2.0"
+      },
+      "technical_checks_passed": true
+    },
+    {
+      "id": "ui-3d-raytraced-icons",
+      "file": "public/ui/*.png",
+      "role": "27 Cycles-raytraced 192x192 RGBA transparent 3D hardware & diorama illustrations for 3 stages, 6 weapons, 6 hyper weapons, 7 passive chips, 3 mechs, and 2 fallback modules",
+      "source": {
+        "kind": "authored_procedural_dcc",
+        "tool": "Blender 5.3 Cycles Studio Renderer (scripts/build_assets_all.py + scripts/build_p0_assets.py + scripts/build_scenes_and_drone.py)",
         "license": "Apache-2.0"
       },
       "technical_checks_passed": true

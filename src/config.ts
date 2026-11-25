@@ -8,6 +8,25 @@ export type PassiveId =
   | 'thruster'
   | 'armor';
 export type MechId = 'striker' | 'aegis' | 'nexus';
+export type StageId = 'ruins' | 'foundry' | 'cryo';
+
+export interface StageDef {
+  id: StageId;
+  name: string;
+  badge: string;
+  iconImg: string;
+  coreMult: number;
+  enemyHpMult: number;
+  enemySpdMult: number;
+  bgHex: number;
+  fogHex: number;
+  floorTintHex: number;
+  floorEmissiveHex: number;
+  hemiSkyHex: number;
+  hemiGroundHex: number;
+  sunHex: number;
+  hazardDesc: string;
+}
 
 export interface WeaponDef {
   id: WeaponId;
@@ -42,6 +61,8 @@ export interface MechDef {
   role: string;
   portraitImg: string;
   startWeapon: WeaponId;
+  overdriveName: string;
+  overdriveDesc: string;
   hp: number;
   armor: number;
   speed: number;
@@ -53,6 +74,94 @@ export interface MechDef {
   xpMult: number;
   color: number;
   desc: string;
+}
+
+export const STAGES: StageDef[] = [
+  {
+    id: 'ruins',
+    name: '霓虹废墟 · 第零区',
+    badge: '标准战区 · 1.0x 💎',
+    iconImg: './ui/stage_ruins.png',
+    coreMult: 1.0,
+    enemyHpMult: 1.0,
+    enemySpdMult: 1.0,
+    bgHex: 0x050814,
+    fogHex: 0x050814,
+    floorTintHex: 0xffffff,
+    floorEmissiveHex: 0x38bdf8,
+    hemiSkyHex: 0x7dd3fc,
+    hemiGroundHex: 0x1e1b4b,
+    sunHex: 0xffffff,
+    hazardDesc: '高爆等离子桶链 · 周期空投【战术骇入信标】驻守开箱',
+  },
+  {
+    id: 'foundry',
+    name: '熔芯铸造厂 · 炼狱炉',
+    badge: '地热喷发 · 1.35x 💎',
+    iconImg: './ui/stage_foundry.png',
+    coreMult: 1.35,
+    enemyHpMult: 1.2,
+    enemySpdMult: 1.06,
+    bgHex: 0x160604,
+    fogHex: 0x1a0704,
+    floorTintHex: 0xffbfa3,
+    floorEmissiveHex: 0xff5500,
+    hemiSkyHex: 0xfdba74,
+    hemiGroundHex: 0x3b0a06,
+    sunHex: 0xffedd5,
+    hazardDesc: '周期喷发【地热熔岩火柱】敌我不分，诱敌入火海瞬间融化！',
+  },
+  {
+    id: 'cryo',
+    name: '极寒量子中枢 · 零度核',
+    badge: '高压超算 · 1.75x 💎',
+    iconImg: './ui/stage_cryo.png',
+    coreMult: 1.75,
+    enemyHpMult: 1.42,
+    enemySpdMult: 1.14,
+    bgHex: 0x030d1c,
+    fogHex: 0x041022,
+    floorTintHex: 0xdbeafe,
+    floorEmissiveHex: 0x67e8f9,
+    hemiSkyHex: 0xa5f3fc,
+    hemiGroundHex: 0x0f172a,
+    sunHex: 0xe0f2fe,
+    hazardDesc: '高难敌群提速 + 量子塔释放【极寒超导冰环】冻结敌群 55% 移速！',
+  },
+];
+
+export interface DailyChallengeSpec {
+  dateKey: string;
+  seed: number;
+  stageIdx: number;
+  mechIdx: number;
+  modifierTitle: string;
+  bonusCores: number;
+}
+
+export function getDailyChallengeSpec(): DailyChallengeSpec {
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(now.getUTCDate()).padStart(2, '0');
+  const dateKey = `${yyyy}-${mm}-${dd}`;
+
+  // Fixed FNV-1a 32-bit hash (roguelike skill: never use non-deterministic runtime hash)
+  let h = 2166136261;
+  for (let i = 0; i < dateKey.length; i++) {
+    h ^= dateKey.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const u = h >>> 0;
+  const modifiers = ['狙击矩阵超频', '超导暴击狂潮', '重装机神压境'];
+  return {
+    dateKey,
+    seed: u,
+    stageIdx: u % STAGES.length,
+    mechIdx: (u >>> 3) % 3,
+    modifierTitle: modifiers[(u >>> 6) % modifiers.length],
+    bonusCores: 90,
+  };
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
@@ -225,6 +334,8 @@ export const MECHS: MechDef[] = [
     role: '高速游走 · 暴击刀波',
     portraitImg: './ui/mech_striker.png',
     startWeapon: 'kunai',
+    overdriveName: '次元千本樱',
+    overdriveDesc: '16 道穿透新月光刃环形风暴 + 2.2s 无敌超频',
     hp: 110,
     armor: 4,
     speed: 8.2,
@@ -235,7 +346,7 @@ export const MECHS: MechDef[] = [
     dmgMult: 1.0,
     xpMult: 1.0,
     color: 0x22d3ee,
-    desc: '初始搭载【等离子脉冲刃】。暴击率 +15%，冲刺冷却 -30%，冲刺释放新月刀波斩裂路径敌群。',
+    desc: '暴击 +15%，冲刺冷却 -30%。超载必杀【次元千本樱】环形斩裂全屏敌群！',
   },
   {
     id: 'aegis',
@@ -243,6 +354,8 @@ export const MECHS: MechDef[] = [
     role: '重装碾压 · 战损狂暴',
     portraitImg: './ui/mech_aegis.png',
     startWeapon: 'saw',
+    overdriveName: '地核崩裂炮',
+    overdriveDesc: '全屏熔金核爆震荡清场 + 立即修复 35% 装甲',
     hp: 165,
     armor: 20,
     speed: 6.8,
@@ -253,7 +366,7 @@ export const MECHS: MechDef[] = [
     dmgMult: 1.08,
     xpMult: 1.0,
     color: 0xf43f5e,
-    desc: '初始搭载【磁浮切割环】。高血高甲、攻击范围 +22%，损失生命还会进一步提升全局伤害。',
+    desc: '高血高甲、范围 +22%，战损增伤。超载必杀【地核崩裂炮】全屏核爆并回血！',
   },
   {
     id: 'nexus',
@@ -261,6 +374,8 @@ export const MECHS: MechDef[] = [
     role: '弹幕倾泻 · 极速发育',
     portraitImg: './ui/mech_nexus.png',
     startWeapon: 'arc',
+    overdriveName: '天穹浮游齐射',
+    overdriveDesc: '12 道天基审判光柱锁敌轰顶 + 全图晶体真空磁吸',
     hp: 100,
     armor: 2,
     speed: 7.5,
@@ -271,7 +386,7 @@ export const MECHS: MechDef[] = [
     dmgMult: 0.92,
     xpMult: 1.2,
     color: 0xa855f7,
-    desc: '初始搭载【特斯拉电弧炮】。天生投射物数量 +1，经验获取 +20%，满屏弹幕成型最快！',
+    desc: '投射物 +1、经验 +20%。超载必杀【天穹浮游齐射】天降雷柱并吸空全图晶体！',
   },
 ];
 

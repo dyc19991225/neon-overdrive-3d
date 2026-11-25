@@ -32,14 +32,18 @@
             <span id="hp-text">100 / 100</span>
           </div>
           <div class="dash-panel">
-            <span>SPACE 相位冲刺</span>
+            <span>SPACE 冲刺</span>
             <div class="dash-bar-bg"><div id="dash-bar-fill"></div></div>
+          </div>
+          <div class="ult-panel">
+            <span id="ult-label">[Q] 超载必杀</span>
+            <div class="ult-bar-bg"><div id="ult-bar-fill"></div></div>
           </div>
           <div class="buff-row">
             <div id="buff-frenzy" class="buff-pill frenzy hidden">
               🔥 无限超载 <strong id="frenzy-time">5.0s</strong>
             </div>
-            <div id="buff-revive" class="buff-pill revive hidden">🛡 涅槃协议就绪</div>
+            <div id="buff-revive" class="buff-pill revive hidden">🛡 涅槃就绪</div>
           </div>
           <div id="slots-weapons" class="slot-row"></div>
           <div id="slots-passives" class="slot-row"></div>
@@ -48,6 +52,10 @@
         <div class="hud-center">
           <div id="timer-text">00:00</div>
           <div id="wave-label">STAGE 1 · 觉醒热身</div>
+          <div id="beacon-banner" class="beacon-banner hidden">
+            <div id="beacon-title">📡 战术骇入信标 · 进圈充能 0%</div>
+            <div class="beacon-bar-bg"><div id="beacon-bar-fill"></div></div>
+          </div>
           <div id="boss-banner" class="hidden">
             <div id="boss-name">⚠ 重装蜘蛛统领</div>
             <div class="boss-hp-bg"><div id="boss-hp-fill"></div></div>
@@ -72,13 +80,19 @@
 
       <div id="toast-banner" class="hidden"></div>
 
-      <!-- Mobile Floating Virtual Joystick & Touch Phase-Dash Controls -->
+      <!-- Mobile Floating Virtual Joystick + Dual Active Buttons (Dash & Overdrive Ultimate) -->
       <div id="touch-controls">
         <div id="joystick-zone">
           <div id="joy-base">
             <div id="joy-knob"></div>
           </div>
         </div>
+        <button id="btn-touch-ult" type="button" aria-label="超载必杀">
+          <span class="ult-btn-inner">
+            <span class="ult-btn-icon">💥</span>
+            <span id="touch-ult-txt" class="ult-btn-txt">50%</span>
+          </span>
+        </button>
         <button id="btn-touch-dash" type="button" aria-label="相位冲刺">
           <span class="dash-btn-inner">
             <span class="dash-btn-icon">⚡</span>
@@ -88,19 +102,19 @@
       </div>
 
       <div class="hud-bottom-hint">
-        <span>[WASD / 方向键] 走位引导朝向</span>
-        <span>[SPACE] 无敌冲刺 / 贴脸极限闪避</span>
-        <span>[TAB] 6超武图鉴与音量</span>
-        <span>[M] 音乐开关</span>
-        <span class="debug-hint">[F2 空投舱 · F3 升级 · F4 召唤Boss · F5 磁铁狂暴球]</span>
+        <span>[WASD] 走位引导</span>
+        <span>[SPACE] 冲刺/极限闪避</span>
+        <span>[Q] 觉醒超载必杀</span>
+        <span>[TAB] 图鉴混音</span>
+        <span class="debug-hint">[F2 空投 · F3 升级 · F4 Boss · F5 道具 · F6 满大招+骇入塔]</span>
       </div>
     </div>
 
-    <!-- Title Screen (Pure Keyboard + Click + Meta Hangar) -->
+    <!-- Title Screen (Mechs + 3 Stages + Daily Challenge + Meta Hangar) -->
     <div id="title-screen" class="overlay">
       <div class="title-box">
         <div class="title-header-bar">
-          <span class="cyber-tag">THREE.JS r187 · 6 HYPER WEAPONS · ADAPTIVE SYNTH</span>
+          <span class="cyber-tag">3 BIOME SCENES · OVERDRIVE ULTIMATES · HACK OBJECTIVES</span>
           <div class="core-wallet">
             <span class="wallet-pill">💎 超导核心 <strong id="core-balance">60</strong></span>
             <span id="career-summary" class="career-pill">累计击坠 0 · 最佳 00:00</span>
@@ -109,27 +123,42 @@
 
         <h1>霓虹超载<span>NEON OVERDRIVE</span></h1>
         <p class="subtitle">
-          单手纯键盘畅玩 · 机甲脚下弧形血量/冲刺环 · 6 主武器 Lv8 + 配对芯片开箱觉醒超武
+          三大 3D 灾害战区 · 战术信标占点骇入 · `[Q]`/触屏觉醒超载必杀 · 6 超武合成爽游
         </p>
+
+        <!-- 3 Selectable 3D Stages + Seeded UTC Daily Challenge -->
+        <div class="stage-panel">
+          <div class="stage-header">
+            <span>🗺️ 选择作战战区（点击或按 <strong>[Q / E]</strong> 切换场景）</span>
+            <button id="btn-daily-run" class="neon-btn tiny gold-btn" type="button">
+              📅 每日特遣挑战 (+💎90)
+            </button>
+          </div>
+          <div id="stage-grid" class="stage-grid"></div>
+        </div>
 
         <div class="mech-grid" id="mech-grid"></div>
 
         <!-- Meta-Hangar Permanent Progression -->
         <div class="hangar-panel">
           <div class="hangar-header">
-            <span>🔧 局外机库永久改装（点击或按数字键 <strong>[4]–[9]</strong> 升级）</span>
-            <button id="btn-hangar-reset" class="neon-btn tiny">[0] 免费重置返还</button>
+            <span>🔧 局外机库永久改装（点击或按 <strong>[4]–[9]</strong> 升级）</span>
+            <button id="btn-hangar-reset" class="neon-btn tiny" type="button">[0] 免费重置返还</button>
           </div>
           <div id="hangar-grid" class="hangar-grid"></div>
         </div>
 
         <div class="title-actions">
           <div class="title-btn-row">
-            <button id="btn-start" class="neon-btn primary">按 [SPACE / ENTER] 立即出击</button>
-            <button id="btn-title-mute" class="neon-btn small">[M] 电音 BGM：开启</button>
+            <button id="btn-start" class="neon-btn primary" type="button">
+              按 [SPACE / ENTER] 立即出击
+            </button>
+            <button id="btn-title-mute" class="neon-btn small" type="button">
+              [M] 电音 BGM：开启
+            </button>
           </div>
           <div class="key-legend">
-            切换机体：[A / D] 或 [1 / 2 / 3] · 机库强化：[4]–[9] · 走位自动倾泻弹幕
+            选机体：[1/2/3] · 切战区：[Q/E] · 机库强化：[4]–[9] · 手机支持动态摇杆与双主动触控键
           </div>
         </div>
       </div>
@@ -143,7 +172,9 @@
         <div id="card-container" class="card-grid"></div>
         <div class="modal-footer">
           <span>按数字键 <strong>[1] [2] [3]</strong> 或点击卡片秒选</span>
-          <button id="btn-reroll" class="neon-btn small">[R] 重随 (<span id="reroll-left">2</span>)</button>
+          <button id="btn-reroll" class="neon-btn small" type="button">
+            [R] 重随 (<span id="reroll-left">2</span>)
+          </button>
         </div>
       </div>
     </div>
@@ -154,7 +185,7 @@
         <div class="modal-tag">HYPER EVOLUTION MATRIX &amp; AUDIO BUS</div>
         <h2>全 6 组超武合成图鉴（已暂停）</h2>
         <p class="recipe-sub">
-          任意主武器升满 <strong>Lv 8</strong> + 持有对应 <strong>Lv 1 被动芯片</strong> → 拾取金色超导空投舱必定进化！
+          任意主武器升满 <strong>Lv 8</strong> + 持有对应 <strong>Lv 1 被动芯片</strong> → 拾取空投舱或占领【📡骇入信标】必定进化！
         </p>
         <div id="recipe-list" class="recipe-grid"></div>
 
@@ -167,13 +198,15 @@
             <span>💥 战斗音效 <strong id="sfx-val">85%</strong></span>
             <input id="sfx-slider" type="range" min="0" max="100" value="85" />
           </label>
-          <button id="btn-mute-bgm" class="neon-btn tiny">[M] 静音切换</button>
-          <button id="btn-feel-toggle" class="neon-btn tiny">[V] 震屏强闪：100%</button>
+          <button id="btn-mute-bgm" class="neon-btn tiny" type="button">[M] 静音切换</button>
+          <button id="btn-feel-toggle" class="neon-btn tiny" type="button">[V] 震屏强闪：100%</button>
         </div>
 
         <div class="modal-footer">
-          <span>提示：打破地图高爆等离子桶或击杀重装精英可掉落【全屏磁铁】与【无限超载球】</span>
-          <button id="btn-resume" class="neon-btn primary">按 [TAB / P / SPACE] 继续战斗</button>
+          <span>新玩法：占领【📡骇入塔】空投超导箱 · 攒满能量按 [Q]/💥 释放机甲专属全屏必杀技！</span>
+          <button id="btn-resume" class="neon-btn primary" type="button">
+            按 [TAB / P / SPACE] 继续战斗
+          </button>
         </div>
       </div>
     </div>
@@ -190,7 +223,9 @@
           <div id="dps-chart" class="dps-chart"></div>
         </div>
 
-        <button id="btn-restart" class="neon-btn primary">按 [SPACE / ENTER] 返回机库改装</button>
+        <button id="btn-restart" class="neon-btn primary" type="button">
+          按 [SPACE / ENTER] 返回机库与战区选择
+        </button>
       </div>
     </div>
 

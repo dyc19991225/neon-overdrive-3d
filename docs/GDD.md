@@ -1,6 +1,6 @@
 # 霓虹超载：机甲幸存者 (NEON OVERDRIVE) — Game Design Document
 
-**Version:** 0.3 · **Updated:** 2026-11-25 · [Features](#feature-index) · [Decisions](#decisions) · [Change log](#change-log)
+**Version:** 0.4 · **Updated:** 2026-11-25 · [Features](#feature-index) · [Decisions](#decisions) · [Change log](#change-log)
 
 ## Summary
 玩家驾驶一台孤军深入赛博废墟的实验型战斗机甲，在全屏涌来的失控机械虫群与重装卫队包围中高速走位、自动倾泻霓虹弹幕。击碎敌群爆出满地发光数据晶体，磁吸升阶并在全息三选一中凑齐「主武器 + 核心芯片」合成毁天灭地的超武（Hyper Weapon）。单局浓缩为高密度 **12 分钟** `[ASSUMPTION]`，击败第 12 分钟降临的泰坦核心即宣告破关，机身归零则本局终结并结算局外机库改装点。
@@ -67,6 +67,7 @@
 - **技术风险与验证计划：** 已将全部范围伤害、闪电链、激光线段与自爆友伤全面迁移至 `gridHead`/`gridNext` 空间哈希邻域查询，并通过 Vite 分包隔离 `three-core` 与 `three-addons`。
 
 ## Change log
+**0.4 (2026-11-25):** 实装三大 3D 灾害主题场景（霓虹废墟 / 熔芯铸造厂地热熔岩火柱 / 极寒量子中枢超导冰环）、地图战术信标占点骇入与狂猎挑战祭坛、3 台机甲专属 `[Q]`/触屏 `💥` 终极超载必杀技、第 5 类远程电浆狙击浮游炮敌机、每日 UTC 固定种子特遣挑战及完整移动端竖屏/横屏双主动触控适配。
 **0.3 (2026-11-25):** 完成 P0→P1→P2 全量优化升级（记录 D-005）：补齐纳米引力阱/★黑洞奇点与轨道离子迫击/★天基审判共 6 套超武、3D 地面弧形血量/冲刺环与屏幕边缘追踪箭头、全屏磁铁与狂暴球掉落、Boss 三连地面红毯预警、结算武器 DPS 占比榜、带 `.bak` 备份链的机库存档、130 BPM 自适应电音 BGM 总线闪避及全空间哈希优化。
 **0.2 (2026-11-25):** 确认 12 分钟局、纯键盘走位引导激光与 M1 四超武尝鲜范围（记录 D-004），完成 `three.js` r187 初版可玩原型落地。
 **0.1 (2026-11-25):** 初版 GDD 起草，完成 [weapons-evolution](features/weapons-evolution/design.md)、[horde-waves](features/horde-waves/design.md)、[mech-builds](features/mech-builds/design.md) 三份核心数值设计并记录决策 D-001 至 D-003。

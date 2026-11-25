@@ -1,18 +1,14 @@
-// Multi-Bus Procedural WebAudio Synthesizer & Adaptive Darksynth BGM Engine
-// Bus layout (audio-design skill):
-//   SFX   -> sfxLowpass (Witch-Time) -> sfxBus -> masterComp -> destination
-//   Music -> musicLowpass (Duck/Menu) -> musicDuckBus -> musicBus -> masterComp -> destination
+// Multi-Bus Procedural WebAudio Synthesizer & Stage-Adaptive Darksynth BGM Engine
+import type { StageId } from './config';
 
 const BPM = 130;
-const STEP_DUR = 60 / BPM / 4; // 16th note = ~0.1154s
+const STEP_DUR = 60 / BPM / 4;
 
-// D Minor / Phrygian cyberpunk bassline (MIDI notes -> Hz)
 const BASS_PATTERN = [
   38, 38, 50, 38, 38, 38, 41, 38, 38, 38, 45, 38, 43, 38, 41, 40,
   34, 34, 46, 34, 34, 34, 41, 34, 36, 36, 48, 36, 36, 43, 45, 48,
 ];
 
-// High-energy Hyper/Boss Arpeggio (MIDI notes)
 const ARP_PATTERN = [
   62, 65, 69, 74, 72, 69, 65, 69, 62, 65, 69, 76, 74, 69, 65, 67,
   58, 62, 65, 70, 69, 65, 62, 65, 60, 64, 67, 72, 76, 72, 67, 64,
@@ -25,7 +21,7 @@ function midiToHz(midi: number): number {
 function sliderToGain(slider01: number): number {
   if (slider01 <= 0.001) return 0;
   const clamped = Math.max(0, Math.min(1, slider01));
-  return clamped * clamped; // Perceptual squared taper
+  return clamped * clamped;
 }
 
 export class CyberAudio {
@@ -40,8 +36,8 @@ export class CyberAudio {
   private sfxVolume = 0.85;
   private bgmVolume = 0.65;
   private bgmMuted = false;
+  private stageTheme: StageId = 'ruins';
 
-  // Beat-synced lookahead BGM state
   private nextStepTime = 0;
   private stepIndex = 0;
   private bgmRunning = false;
@@ -67,7 +63,6 @@ export class CyberAudio {
       comp.release.value = 0.14;
       comp.connect(this.ctx.destination);
 
-      // SFX Bus
       this.sfxLowpass = this.ctx.createBiquadFilter();
       this.sfxLowpass.type = 'lowpass';
       this.sfxLowpass.frequency.value = 20000;
@@ -78,7 +73,6 @@ export class CyberAudio {
       this.sfxLowpass.connect(this.sfxBus);
       this.sfxBus.connect(comp);
 
-      // Music Bus with dedicated Ducking + Lowpass stage
       this.musicLowpass = this.ctx.createBiquadFilter();
       this.musicLowpass.type = 'lowpass';
       this.musicLowpass.frequency.value = 18000;
@@ -107,6 +101,10 @@ export class CyberAudio {
     }
   }
 
+  public setStageTheme(stage: StageId): void {
+    this.stageTheme = stage;
+  }
+
   public setVolumes(bgmVol: number, sfxVol: number): void {
     this.bgmVolume = Math.max(0, Math.min(1, bgmVol));
     this.sfxVolume = Math.max(0, Math.min(1, sfxVol));
@@ -131,17 +129,11 @@ export class CyberAudio {
     return this.bgmMuted;
   }
 
-  public getVolumes(): { bgm: number; sfx: number } {
-    return { bgm: this.bgmVolume, sfx: this.sfxVolume };
-  }
-
-  // Smooth click-free lowpass sweep for Witch-Time / Perfect Dodge!
   public setBulletTimeMuffle(active: boolean): void {
     if (!this.ctx || !this.sfxLowpass) return;
     this.sfxLowpass.frequency.setTargetAtTime(active ? 720 : 20000, this.ctx.currentTime, 0.035);
   }
 
-  // Duck music by ~-11 dB + warm filter during upgrade modals, pause menus, or Witch-Time
   public setMusicDucked(ducked: boolean): void {
     if (!this.ctx || !this.musicDuckBus || !this.musicLowpass) return;
     const t = this.ctx.currentTime;
@@ -149,8 +141,6 @@ export class CyberAudio {
     this.musicLowpass.frequency.setTargetAtTime(ducked ? 680 : 18000, t, ducked ? 0.04 : 0.14);
   }
 
-  // Lookahead Adaptive Synthwave Sequencer driven by ctx.currentTime (zero frame-rate drift!)
-  // intensity: 0 = Stage 1 groove, 1 = Stage 2 / Combo percussion, 2 = Boss / Hyper / Frenzy lead arp
   public stepAdaptiveBgm(active: boolean, intensity: 0 | 1 | 2, ducked: boolean): void {
     if (!this.ctx || !this.musicLowpass || !this.noiseBuf || this.ctx.state !== 'running') return;
     this.setMusicDucked(ducked);
@@ -176,8 +166,8 @@ export class CyberAudio {
   private scheduleSynthStep(step: number, t: number, intensity: 0 | 1 | 2): void {
     if (!this.ctx || !this.musicLowpass || !this.noiseBuf) return;
     const barStep = step % 16;
+    const pitchShift = this.stageTheme === 'foundry' ? -2 : this.stageTheme === 'cryo' ? 3 : 0;
 
-    // 1. Four-on-the-floor Cyber Sub-Kick (steps 0, 4, 8, 12)
     if (barStep % 4 === 0) {
       const kick = this.ctx.createOscillator();
       const kg = this.ctx.createGain();
@@ -191,17 +181,16 @@ export class CyberAudio {
       kick.stop(t + 0.14);
     }
 
-    // 2. Rolling Off-Beat Darksynth Saw Bass (ducked slightly on kick steps)
     const isKickStep = barStep % 4 === 0;
-    const bassFreq = midiToHz(BASS_PATTERN[step]);
+    const bassFreq = midiToHz(BASS_PATTERN[step] + pitchShift);
     const bass = this.ctx.createOscillator();
     const bFilter = this.ctx.createBiquadFilter();
     const bg = this.ctx.createGain();
-    bass.type = 'sawtooth';
+    bass.type = this.stageTheme === 'cryo' ? 'square' : 'sawtooth';
     bass.frequency.setValueAtTime(bassFreq, t);
     bFilter.type = 'lowpass';
-    bFilter.Q.value = 3.2;
-    bFilter.frequency.setValueAtTime(isKickStep ? 420 : 1050, t);
+    bFilter.Q.value = this.stageTheme === 'foundry' ? 4.4 : 3.2;
+    bFilter.frequency.setValueAtTime(isKickStep ? 420 : 1100, t);
     bFilter.frequency.exponentialRampToValueAtTime(155, t + STEP_DUR * 0.88);
     bg.gain.setValueAtTime(isKickStep ? 0.11 : 0.24, t);
     bg.gain.exponentialRampToValueAtTime(0.001, t + STEP_DUR * 0.92);
@@ -209,7 +198,6 @@ export class CyberAudio {
     bass.start(t);
     bass.stop(t + STEP_DUR);
 
-    // 3. Stem 2 (intensity >= 1): Metallic 16th Hi-Hats & Backbeat Snare Clap
     if (intensity >= 1) {
       const hat = this.ctx.createBufferSource();
       hat.buffer = this.noiseBuf;
@@ -240,12 +228,11 @@ export class CyberAudio {
       }
     }
 
-    // 4. Stem 3 (intensity >= 2): High-Octave Neon Overdrive Lead Arpeggio!
     if (intensity >= 2) {
-      const arpFreq = midiToHz(ARP_PATTERN[step]);
+      const arpFreq = midiToHz(ARP_PATTERN[step] + pitchShift);
       const lead = this.ctx.createOscillator();
       const lg = this.ctx.createGain();
-      lead.type = step % 2 === 0 ? 'square' : 'sawtooth';
+      lead.type = this.stageTheme === 'cryo' ? 'triangle' : step % 2 === 0 ? 'square' : 'sawtooth';
       lead.detune.value = step % 3 === 0 ? 7 : -7;
       lead.frequency.setValueAtTime(arpFreq, t);
       lg.gain.setValueAtTime(0.085, t);
@@ -257,7 +244,92 @@ export class CyberAudio {
   }
 
   // =========================================================================
-  // Layered Weapon & Combat SFX
+  // New Gameplay SFX: Overdrive Ultimate, Hack Beacon, Hazards & Sniper Drone
+  // =========================================================================
+  public playOverdriveUltimate(): void {
+    if (!this.ctx || !this.sfxLowpass || !this.noiseBuf) return;
+    const t = this.ctx.currentTime;
+    // Sub drop + heroic cyber power chord
+    const sub = this.ctx.createOscillator();
+    const sg = this.ctx.createGain();
+    sub.type = 'sawtooth';
+    sub.frequency.setValueAtTime(260, t);
+    sub.frequency.exponentialRampToValueAtTime(32, t + 0.55);
+    sg.gain.setValueAtTime(0.32, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.58);
+    sub.connect(sg).connect(this.sfxLowpass);
+    sub.start(t);
+    sub.stop(t + 0.6);
+
+    for (const [idx, freq] of [293.66, 440, 587.33, 880, 1174.66].entries()) {
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'sawtooth';
+      o.detune.value = (idx - 2) * 9;
+      o.frequency.setValueAtTime(freq * 0.85, t + idx * 0.03);
+      o.frequency.exponentialRampToValueAtTime(freq, t + idx * 0.03 + 0.08);
+      g.gain.setValueAtTime(0.11, t + idx * 0.03);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.52);
+      o.connect(g).connect(this.sfxLowpass);
+      o.start(t + idx * 0.03);
+      o.stop(t + 0.55);
+    }
+  }
+
+  public playBeaconTick(progress01: number): void {
+    if (!this.ctx || !this.sfxLowpass) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    const freq = 440 * Math.pow(2, progress01 * 1.1);
+    osc.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.09, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    osc.connect(g).connect(this.sfxLowpass);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  }
+
+  public playHazardErupt(cryo: boolean): void {
+    if (!this.ctx || !this.sfxLowpass || !this.noiseBuf) return;
+    const t = this.ctx.currentTime;
+    if (cryo) {
+      // Crystalline ice-EMP shatter
+      for (const f of [1046.5, 1396.9, 2093]) {
+        const o = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        o.type = 'triangle';
+        o.frequency.setValueAtTime(f, t);
+        o.frequency.exponentialRampToValueAtTime(f * 0.5, t + 0.28);
+        g.gain.setValueAtTime(0.11, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+        o.connect(g).connect(this.sfxLowpass);
+        o.start(t);
+        o.stop(t + 0.32);
+      }
+    } else {
+      this.playExplosion(true);
+    }
+  }
+
+  public playSniperShot(): void {
+    if (!this.ctx || !this.sfxLowpass) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(1420, t);
+    o.frequency.exponentialRampToValueAtTime(260, t + 0.09);
+    g.gain.setValueAtTime(0.08, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.095);
+    o.connect(g).connect(this.sfxLowpass);
+    o.start(t);
+    o.stop(t + 0.1);
+  }
+
+  // =========================================================================
+  // Core Weapon & Combat SFX
   // =========================================================================
   public playKunai(hyper: boolean): void {
     if (!this.ctx || !this.sfxLowpass || !this.noiseBuf) return;
@@ -339,7 +411,6 @@ export class CyberAudio {
     if (!this.ctx || !this.sfxLowpass) return;
     const t = this.ctx.currentTime;
     if (!collapse) {
-      // Dark singularity implosion hum
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
       osc.type = 'sine';
@@ -351,7 +422,6 @@ export class CyberAudio {
       osc.start(t);
       osc.stop(t + 0.36);
     } else {
-      // Singularity Collapse: upward vacuum zip -> seismic sub drop
       const zip = this.ctx.createOscillator();
       const zg = this.ctx.createGain();
       zip.type = 'sawtooth';
@@ -369,7 +439,6 @@ export class CyberAudio {
   public playOrbitalStrike(hyper: boolean): void {
     if (!this.ctx || !this.sfxLowpass || !this.noiseBuf) return;
     const t = this.ctx.currentTime;
-    // High-energy orbital ion beam impact + sub shock
     const beam = this.ctx.createOscillator();
     const bg = this.ctx.createGain();
     beam.type = 'sawtooth';

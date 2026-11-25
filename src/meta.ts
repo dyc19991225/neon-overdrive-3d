@@ -1,7 +1,7 @@
-import { WEAPONS, type WeaponId } from './config';
+import { WEAPONS, type StageId, type WeaponId } from './config';
 
-// Versioned Persistent Save System (save-systems skill: integer version, .bak rotation, migrations)
-export const SAVE_VERSION = 1;
+// Versioned Persistent Save System (save-systems skill: v1 -> v2 migration + .bak rotation)
+export const SAVE_VERSION = 2;
 const SAVE_KEY = 'neon_overdrive_save';
 const BACKUP_KEY = 'neon_overdrive_save.bak';
 
@@ -88,22 +88,31 @@ export interface MetaSaveData {
   bestSurvivalSec: number;
   bgmVolume: number;
   sfxVolume: number;
+  lastDailyClaimDate: string;
+  clearedStages: StageId[];
   upgrades: Record<HangarUpgradeId, number>;
 }
 
 const MIGRATIONS: Record<number, (raw: Record<string, unknown>) => Record<string, unknown>> = {
-  // Future v1 -> v2 schema migrations plug in here sequentially
+  1: (raw) => ({
+    ...raw,
+    version: 2,
+    lastDailyClaimDate: '',
+    clearedStages: [],
+  }),
 };
 
 function defaultSave(): MetaSaveData {
   return {
     version: SAVE_VERSION,
-    cores: 60, // Starter grant so players can test Hangar customization immediately
+    cores: 60,
     totalRuns: 0,
     totalKills: 0,
     bestSurvivalSec: 0,
     bgmVolume: 0.65,
     sfxVolume: 0.85,
+    lastDailyClaimDate: '',
+    clearedStages: [],
     upgrades: {
       hull: 0,
       overcharge: 0,
@@ -143,6 +152,11 @@ function sanitizeSave(rawObj: unknown): MetaSaveData | null {
     upgrades[def.id] = Math.floor(clampNum(rawUpg[def.id], 0, def.maxLv, 0));
   }
 
+  const validStageIds = new Set<StageId>(['ruins', 'foundry', 'cryo']);
+  const clearedStages = Array.isArray(data.clearedStages)
+    ? (data.clearedStages.filter((s) => validStageIds.has(s as StageId)) as StageId[])
+    : [];
+
   return {
     version: SAVE_VERSION,
     cores: Math.floor(clampNum(data.cores, 0, 9999999, base.cores)),
@@ -151,6 +165,8 @@ function sanitizeSave(rawObj: unknown): MetaSaveData | null {
     bestSurvivalSec: Math.floor(clampNum(data.bestSurvivalSec, 0, 99999, 0)),
     bgmVolume: clampNum(data.bgmVolume, 0, 1, base.bgmVolume),
     sfxVolume: clampNum(data.sfxVolume, 0, 1, base.sfxVolume),
+    lastDailyClaimDate: typeof data.lastDailyClaimDate === 'string' ? data.lastDailyClaimDate : '',
+    clearedStages,
     upgrades,
   };
 }
@@ -163,7 +179,7 @@ export function loadMetaSave(): MetaSaveData {
       if (parsed) return parsed;
     }
   } catch {
-    // Primary corrupted or unreadable; fall back to .bak
+    // Primary corrupted; try .bak
   }
 
   try {
@@ -176,7 +192,7 @@ export function loadMetaSave(): MetaSaveData {
       }
     }
   } catch {
-    // Both missing/corrupt; initialize clean default
+    // Both missing/corrupt
   }
 
   const fresh = defaultSave();
@@ -188,7 +204,6 @@ export function saveMetaSave(data: MetaSaveData): void {
   try {
     const prev = window.localStorage.getItem(SAVE_KEY);
     if (prev) {
-      // Only rotate valid JSON into .bak so we never overwrite good backup with garbage
       try {
         if (sanitizeSave(JSON.parse(prev))) {
           window.localStorage.setItem(BACKUP_KEY, prev);
@@ -200,7 +215,7 @@ export function saveMetaSave(data: MetaSaveData): void {
     const payload = JSON.stringify({ ...data, version: SAVE_VERSION });
     window.localStorage.setItem(SAVE_KEY, payload);
   } catch {
-    // Ignore storage quota / private-mode restrictions gracefully
+    // Ignore storage quota / private-mode restrictions
   }
 }
 
@@ -223,18 +238,18 @@ export function computeRunRewardCores(
   kills: number,
   runTimeSec: number,
   bossesDefeated: number,
-  victory: boolean
+  victory: boolean,
+  stageCoreMult = 1.0,
+  bonusCores = 0
 ): number {
   const fromKills = Math.floor(kills * 0.25);
   const fromTime = Math.floor((runTimeSec / 60) * 14);
   const fromBoss = bossesDefeated * 45;
   const clearBonus = victory ? 120 : 0;
-  return Math.max(runTimeSec >= 8 ? 12 : 4, fromKills + fromTime + fromBoss + clearBonus);
+  const base = Math.max(runTimeSec >= 8 ? 12 : 4, fromKills + fromTime + fromBoss + clearBonus);
+  return Math.round(base * stageCoreMult) + bonusCores;
 }
 
-// =========================================================================
-// Per-Weapon Damage & DPS Breakdown Tracker (P1.2)
-// =========================================================================
 export interface WeaponDpsRow {
   id: WeaponId;
   name: string;
