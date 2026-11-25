@@ -427,6 +427,8 @@ class NeonOverdriveGame {
   private tmpProj = new THREE.Vector3();
 
   constructor() {
+    this.gridHead.fill(-1);
+    this.gridNext.fill(-1);
     this.metaSave = loadMetaSave();
     this.audio.setVolumes(this.metaSave.bgmVolume, this.metaSave.sfxVolume);
 
@@ -2035,6 +2037,7 @@ class NeonOverdriveGame {
     if (this.isDailyRun && this.dailyModTitle === '重装机神压境') {
       this.spawnEnemy(3, 14, -14, true);
     }
+    this.rebuildSpatialGrid();
 
     this.setScreen('playing');
     this.updateSlotBadges();
@@ -2382,6 +2385,7 @@ class NeonOverdriveGame {
   // =========================================================================
   private rebuildSpatialGrid(): void {
     this.gridHead.fill(-1);
+    this.gridNext.fill(-1);
     this.gridOriginX = this.px - GRID_DIM * GRID_CELL * 0.5;
     this.gridOriginZ = this.pz - GRID_DIM * GRID_CELL * 0.5;
     for (let i = 0; i < MAX_ENEMIES; i++) {
@@ -2415,7 +2419,8 @@ class NeonOverdriveGame {
       const rowOff = gz * GRID_DIM;
       for (let gx = minGx; gx <= maxGx; gx++) {
         let e = this.gridHead[rowOff + gx];
-        while (e !== -1) {
+        let guard = 0;
+        while (e !== -1 && guard++ < MAX_ENEMIES) {
           const next = this.gridNext[e];
           if (this.eActive[e]) {
             const dx = this.eX[e] - cx;
@@ -3818,7 +3823,8 @@ class NeonOverdriveGame {
           const gz = cz + oz;
           if (gx < 0 || gx >= GRID_DIM || gz < 0 || gz >= GRID_DIM) continue;
           let e = this.gridHead[gz * GRID_DIM + gx];
-          while (e !== -1) {
+          let pGuard = 0;
+          while (e !== -1 && pGuard++ < MAX_ENEMIES) {
             if (this.eActive[e] && e !== this.projLastHit[i]) {
               const dx = this.eX[e] - this.projX[i];
               const dz = this.eZ[e] - this.projZ[i];
